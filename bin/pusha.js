@@ -1436,13 +1436,19 @@ function detectPartials(themePath) {
 }
 
 // ─── Bucket J: analytics surface ────────────────────────────────────────────
-// The runtime re-publishes page-type Customer Events from theme-serialized
-// <script data-pusha-analytics-event> blocks. Those payloads are hand-written
-// Liquid living in the merchant's theme, so nothing throws when they drift — a
-// stale or absent payload silently loses attribution data. This bucket is the
-// static check that makes the contract maintainable: coverage (is the event
-// there at all), conformance (is it well-formed), placement (is it inside the
-// swap container), plus raw pixels that bypass Customer Events entirely.
+// The runtime reads page-type payloads from theme-serialized
+// <script data-pusha-analytics-event> blocks and passes them to
+// Shopify.analytics.publish. ⚠ Those publish calls are REJECTED by the platform
+// — the storefront API is custom events only, so no pixel receives them:
+// https://shopify.dev/docs/api/web-pixels-api/emitting-data
+//
+// This bucket still earns its place: the payloads are hand-written Liquid that
+// nothing validates at runtime, and keeping their shape correct is what makes a
+// supported publish path (or a custom-pixel bridge) cheap to adopt later. But
+// its findings must never be phrased as "this makes your pixels work."
+// Coverage (is the event there at all), conformance (is it well-formed),
+// placement (is it inside the swap container), plus raw pixels — which under
+// Pusha are the ones most likely to still work, since a theme can re-fire them.
 
 const MARKER_RE = /<script([^>]*\bdata-pusha-analytics-event\b[^>]*)>([\s\S]*?)<\/script>/gi;
 
@@ -1553,11 +1559,14 @@ function detectAnalyticsSurface(themePath, shellRelSet) {
       }
 
       // Raw pixels — direct installs that bypass Customer Events entirely.
+      // These need a manual refire hook. Do NOT advise migrating them into
+      // Customer Events: that channel is unreachable on a swap, so migrating a
+      // working raw pixel breaks it.
       text.split('\n').forEach((ln, i) => {
         for (const p of RAW_PIXEL_PATTERNS) {
           if (p.re.test(ln)) {
             findings.push({ kind: 'raw-pixel', rank: 'warn', file: rel, line: i + 1, location,
-              what: `${p.what} — not routed through Customer Events, so the bridge can't re-fire it` });
+              what: `${p.what} — fires once per document, so it needs a manual refire from onAfterInit` });
           }
         }
       });
@@ -1591,7 +1600,7 @@ const BUCKET_RULES = {
   K: 'Portal-to-body custom element. Survives PJAX swaps because connectedCallback moves it outside the swap container. Add `data-pusha-cleanup` to every render site so Pusha removes it before each nav.',
   L: 'Per-request Liquid in the layout shell (layout/theme.liquid, section groups, transitively-rendered snippets) freezes on first load. Sub-letters mirror the request-scoped taxonomy: A=URL/template, B=customer, C=cart, D=locale, E=per-page object, F=personalization, G=time, H=app-injected. Rank: auto=URL-derivable in JS, ask=user decides (full-reload boundary or section refetch), ok=already handled by Pusha or theme convention.',
   M: 'Persistent-shell stateful UI — modals/drawers/overlays that lived outside #MainContent and were authored assuming a full reload would dismiss them. Three remediation options: (1) add `data-pusha-close-on-nav` to the root (Pusha strips `[open]` / sets `aria-expanded="false"` / removes body classes listed in `data-pusha-body-class-on-open`); (2) implement a `closeOnNav()` method on the custom element; (3) call `Pusha.onBeforeLeave(() => this.close())` manually. Cart drawers and persistent widgets simply omit the marker — opt-in is the safe default.',
-  J: 'Analytics surface. Pusha re-publishes page-type Customer Events from theme-serialized <script type="application/json" data-pusha-analytics-event> blocks — hand-written Liquid that nothing validates at runtime, so drift is silent. Four kinds: coverage (a product/collection/search/cart page with no marker loses its event on every swap), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and republishes one page\'s payload forever), and raw-pixel (gtag/fbq/dataLayer calls that bypass Customer Events, so the bridge can\'t re-fire them — migrate them into Customer Events, or refire manually from onAfterInit).',
+  J: 'Analytics surface. NOTE: Pusha cannot currently reach Web Pixels at all — the storefront publish API is custom events only, so page-type events do not arrive on a swap no matter how correct the markers are (see README "Analytics & tracking"). This bucket checks the theme-serialized <script type="application/json" data-pusha-analytics-event> blocks anyway, because they are hand-written Liquid that nothing validates at runtime and keeping their shape right is what makes a supported publish path cheap to adopt later. Four kinds: coverage (a product/collection/search/cart page with no marker), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and would republish one page\'s payload forever), and raw-pixel (gtag/fbq/dataLayer calls installed directly in the theme — refire them manually from onAfterInit; do NOT migrate them into Customer Events, which would move a working pixel onto the unreachable channel).',
   P: 'Informational — {% partial %} + @shopify/partial-rendering regions (new-Liquid\'s islands substrate). The inventory maps each partial to its consumers. The partial name is a load-bearing string contract (renaming a declaration breaks every consumer), and Pusha must coordinate its container swap with the theme\'s partials.apply() so a nav mid-refresh has defined ordering.',
 };
 

@@ -399,30 +399,39 @@ These are not configurable — they're correctness requirements. Themes can regi
 
 ### Analytics bridge — required, automatic, in the runtime
 
-**Unlike cart, analytics IS framework concern.** Without a PJAX-aware analytics bridge, every Shopify storefront using Pusha silently corrupts merchant data: admin dashboards under-report pageviews, every pixel wired through Customer Events stops firing on PJAX-navigated pages. This is a non-negotiable piece of infrastructure.
+**Unlike cart, analytics IS framework concern.** Without a PJAX-aware analytics bridge, every Shopify storefront using Pusha silently under-reports: admin dashboards miss pageviews on PJAX-navigated pages. This is a non-negotiable piece of infrastructure.
 
 The bridge ships in the core runtime and runs automatically. It re-fires Shopify's native analytics on every PJAX swap:
 
 ```ts
 function firePageView() {
   const analytics = window.Shopify?.analytics;
-  analytics?.page?.();                              // Shopify admin reporting
-  analytics?.publish?.('page_viewed', { url: window.location.href });  // Customer Events fan-out
+  analytics?.page?.();                              // Shopify admin reporting (classic themes)
+  analytics?.publish?.('page_viewed', { url: window.location.href });  // rejected — see below
 }
 // Fires on every PJAX swap, after initPage runs.
 ```
 
-Two channels covered automatically:
-1. **`Shopify.analytics.page()`** — Shopify admin dashboard (sessions, conversion funnel).
-2. **`Shopify.analytics.publish('page_viewed', payload)`** — Customer Events sandbox. **All pixels wired through Shopify admin** (Meta, GA4, TikTok, Klaviyo, etc.) listen on this channel and re-fire automatically. No theme-side code needed.
+**⚠ The Customer Events channel is NOT covered.** This was previously documented here as working and it is not — correcting it is why this section reads the way it does.
+
+1. **`Shopify.analytics.page()`** — Shopify admin dashboard (sessions, conversion funnel). Works on classic themes. The method is **absent on new-Liquid** (verified, `experiments/native-vs-pusha/results.md`) and the optional chain no-ops.
+2. **`Shopify.analytics.publish('page_viewed', payload)`** — **does not work.** Web Pixels Manager initializes once per document and is not re-initialized on a soft nav, and the storefront publish API is [custom events only](https://shopify.dev/docs/api/web-pixels-api/emitting-data): *"To ensure the quality of standard events, partners and merchants cannot publish standard events."* The call returns `false`. Pixels wired through Shopify admin (Meta, GA4, TikTok, Klaviyo, session replay) go dark after the first page and there is no supported theme-side fix today.
+
+**Do not restore the old claim.** If a future change appears to make pixels work, verify it in the web pixel sandbox on a *published* store before writing it down — the dev/preview environment does not tell the truth here, and counting our own `publish()` calls proves nothing about receipt.
+
+**The documented path**, unbuilt: publish a namespaced custom event (`pusha:page_viewed`) and ship a custom-pixel template the merchant pastes into admin, which calls `fbq` / `gtag` itself. Reaches custom pixels; does not reach app pixels, which subscribe to standard events and receive a custom event only as unparsed `customData`.
+
+**Unverified and worth resolving:** the `standardEvents` bridge re-dispatches `PageViewEvent` through `@shopify/standard-events` (importmap-resolved; not on public npm). Whether that channel is bridged into Web Pixels by the platform is untested. If yes, it's a supported answer on new-Liquid themes. If no, it's the exact platform ask.
 
 **Config opt-out** (rare): `window.theme.config.analytics = false` disables the bridge. Only use this if the merchant explicitly doesn't want Shopify analytics — almost never the right choice.
 
 **Robustness**: if `window.Shopify?.analytics` is absent (unusual setups, older themes, headless contexts), the bridge becomes a silent no-op. It never throws and never blocks navigation.
 
-**What's NOT in the framework** — third-party pixels NOT wired through Customer Events (raw `<head>`-injected `gtag`, `fbq`, `dataLayer.push`, etc.). These are theme-level. The theme either:
-- Migrates those pixels into Customer Events via Shopify admin (preferred — they'll then refire automatically through the bridge)
-- OR registers a `pjax:content-swap` listener / `onAfterInit` hook to refire them manually:
+**What's NOT in the framework** — third-party pixels NOT wired through Customer Events (raw `<head>`-injected `gtag`, `fbq`, `dataLayer.push`, etc.). These are theme-level, and under Pusha they are currently the pixels **most likely to keep working**, because the theme can re-fire them directly.
+
+> Earlier guidance here recommended migrating raw pixels *into* Customer Events so they'd "refire automatically through the bridge." That is backwards and has been removed: migrating a working raw pixel into Customer Events moves it onto the one channel Pusha cannot reach.
+
+The theme registers a `pjax:content-swap` listener / `onAfterInit` hook to refire them manually:
   ```js
   import { onAfterInit } from '@mimetic/pusha/hooks';
   onAfterInit(() => {
@@ -432,7 +441,9 @@ Two channels covered automatically:
   });
   ```
 
-The skill's audit calls out raw-injected pixel scripts (gtag/fbq/dataLayer/ttq call sites) and recommends either Customer Events migration or manual refire. This shipped as **bucket J (analytics surface)** on 2026-08-01, alongside coverage, conformance, and placement checks for the `data-pusha-analytics-event` markers — see `docs/proposals/analytics-surface-audit.md`.
+The skill's audit calls out raw-injected pixel scripts (gtag/fbq/dataLayer/ttq call sites). This shipped as **bucket J (analytics surface)** on 2026-08-01, alongside coverage, conformance, and placement checks for the `data-pusha-analytics-event` markers — see `docs/proposals/analytics-surface-audit.md`.
+
+⚠ **Bucket J's recommendation is wrong as shipped** and needs revisiting alongside the correction above. It offers "Customer Events migration or manual refire" as equivalent options; migration is not an option, because it moves a working raw pixel onto the one channel Pusha cannot reach. Manual refire is the only remedy. The conformance checks on `data-pusha-analytics-event` markers are also validating the shape of payloads that the platform rejects — still worth keeping (the shape should be right if a publish path appears), but the audit must not imply those markers make pixels work.
 
 ### Package exports
 

@@ -56,7 +56,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   (none)
 
 ## J. Analytics surface
-  Analytics surface. Pusha re-publishes page-type Customer Events from theme-serialized <script type="application/json" data-pusha-analytics-event> blocks — hand-written Liquid that nothing validates at runtime, so drift is silent. Four kinds: coverage (a product/collection/search/cart page with no marker loses its event on every swap), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and republishes one page's payload forever), and raw-pixel (gtag/fbq/dataLayer calls that bypass Customer Events, so the bridge can't re-fire them — migrate them into Customer Events, or refire manually from onAfterInit).
+  Analytics surface. NOTE: Pusha cannot currently reach Web Pixels at all — the storefront publish API is custom events only, so page-type events do not arrive on a swap no matter how correct the markers are (see README "Analytics & tracking"). This bucket checks the theme-serialized <script type="application/json" data-pusha-analytics-event> blocks anyway, because they are hand-written Liquid that nothing validates at runtime and keeping their shape right is what makes a supported publish path cheap to adopt later. Four kinds: coverage (a product/collection/search/cart page with no marker), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and would republish one page's payload forever), and raw-pixel (gtag/fbq/dataLayer calls installed directly in the theme — refire them manually from onAfterInit; do NOT migrate them into Customer Events, which would move a working pixel onto the unreachable channel).
   Serialized events:
     layout/theme.liquid:15: cart_viewed  [shell]
     sections/main-collection.liquid:6: collection_viewed  [section]
@@ -71,9 +71,9 @@ whitelists: on (default — pass --no-whitelist to disable)
     sections/main-search.liquid:10: [J-conformance] missing type="application/json" — the browser executes the body as JavaScript
     snippets/cart-events.liquid:5: [J-conformance] payload is not parseable JSON — the runtime warns and skips the event
   Advisory:
-    layout/theme.liquid:5: [J-raw-pixel] direct gtag.js call — not routed through Customer Events, so the bridge can't re-fire it
+    layout/theme.liquid:5: [J-raw-pixel] direct gtag.js call — fires once per document, so it needs a manual refire from onAfterInit
     sections/main-search.liquid:10: [J-conformance] "wishlist_added" is not a known page-type standard event — verify against the Web Pixels standard events
-    templates/index.liquid:3: [J-raw-pixel] Meta pixel fbq() — not routed through Customer Events, so the bridge can't re-fire it
+    templates/index.liquid:3: [J-raw-pixel] Meta pixel fbq() — fires once per document, so it needs a manual refire from onAfterInit
     templates/index.liquid:7: [J-conformance] Pusha already publishes page_viewed on every swap — a theme-supplied one double-counts
     templates/index.liquid:12: [J-conformance] event name is Liquid-computed — cannot verify statically
   A missing or malformed marker never throws — the event simply stops reaching Meta/GA4/TikTok/Klaviyo.

@@ -24,7 +24,7 @@ What `data-section-type` and `sectionInits[handle](root)` plug into. On every PJ
    - Runs `registry.setupGlobal()` once for any newly-registered components.
    - Walks `newContainer.querySelectorAll('[data-section-type]')` and calls `window.theme.sectionInits[handle](root)` for each match.
    - Fires `onAfterSwap` → `onAfterInit` hooks and the legacy `pjax:content-swap` event.
-8. Fires the Shopify analytics bridge (`Shopify.analytics.page()` + `publish('page_viewed')`), then a11y focus + screen-reader announcement of the new title.
+8. Fires the Shopify analytics bridge (`Shopify.analytics.page()` + `publish('page_viewed')` — the `publish` call is rejected by the platform and does **not** reach Web Pixels; see README "Analytics & tracking"), then a11y focus + screen-reader announcement of the new title.
 9. For cached navs, revalidates `[data-island]` sections via Shopify's Section Rendering API in the background.
 
 What this implies for wrappers:
@@ -834,7 +834,7 @@ App-block scripts that mutate the cart (e.g. an upsell app that does its own `/c
 
 - **Don't dispatch on every cart-fetch** — only on successful mutations. Read-only `/cart.js` fetches don't mutate state.
 - **Don't `setTimeout`-delay the dispatch.** Subscribers (Pusha's prefetch invalidator, header cart count, mini-cart) expect the event to fire while the relevant data is still fresh in scope.
-- **Don't conflate with Customer Events.** `Shopify.analytics.publish('product_added_to_cart', ...)` is for analytics pixels, NOT intra-theme UI coordination. Both should fire on cart add; they're different channels.
+- **Don't conflate with Customer Events.** `cart:mutated` is intra-theme UI coordination, not analytics — they're different channels. Note that `Shopify.analytics.publish('product_added_to_cart', …)` is **not** a usable analytics path either: standard event names are rejected from the storefront ([docs](https://shopify.dev/docs/api/web-pixels-api/emitting-data)). Shopify fires that event itself on a real cart add; theme code should not try to.
 
 ### Audit bucket
 

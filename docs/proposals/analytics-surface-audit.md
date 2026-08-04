@@ -1,8 +1,37 @@
 # Proposal — Bucket J (analytics surface)
 
-Status: **IMPLEMENTED** (2026-08-01). Companion to
-`partials-and-remediation-routing.md` (bucket P) and `app-integration-audit.md`
-(bucket X). Not shipped in the npm package (`files` excludes `docs/`).
+Status: **IMPLEMENTED** (2026-08-01), **premise partly corrected 2026-08-04**.
+Companion to `partials-and-remediation-routing.md` (bucket P) and
+`app-integration-audit.md` (bucket X). Not shipped in the npm package (`files`
+excludes `docs/`).
+
+> ## ⚠ Correction — 2026-08-04
+>
+> This proposal assumes the runtime's serialized `data-pusha-analytics-event`
+> payloads actually reach Web Pixels. **They do not.** The storefront publish
+> API is [custom events only](https://shopify.dev/docs/api/web-pixels-api/emitting-data):
+> standard event names are rejected and `publish()` returns `false`. Web Pixels
+> Manager also initializes once per document and is not re-initialized on a soft
+> navigation.
+>
+> Two consequences for what follows:
+>
+> 1. **The "auditable by design" argument below is weaker than written.** It
+>    claims the declarative-Liquid approach beats intercepting WPM internals
+>    because a static tool can check it. The checking part is true. But the
+>    approach it is being compared against is the one that *does* reach pixels,
+>    and this one currently reaches nothing — so it is not a trade that has paid
+>    off yet. It becomes one if a supported publish path appears, or if the
+>    payloads are routed through a custom event into a merchant-authored custom
+>    pixel.
+> 2. **"Migrate to Customer Events" is removed as a remedy for raw pixels.**
+>    It would move a working pixel onto the unreachable channel. Manual refire
+>    from `onAfterInit` is the only remedy.
+>
+> Bucket J is still worth keeping. Validating payload shape is what makes a
+> supported path cheap to adopt later, and the coverage/conformance/placement
+> checks are correct as implemented. What must change is the framing: the bucket
+> does not make pixels work, and its output must not imply that it does.
 
 Motivation: the runtime makes its strongest correctness claim about analytics —
 *"Left unhandled, every store on Pusha silently corrupts merchant data"* — and
@@ -94,9 +123,9 @@ not a finding, matching how P lists partials without flagging them.
 `locationClass` is reused unchanged. For markers the mapping is binary —
 `shell` is a `gap`, everything else is correct — so J adds no
 `REMEDIATION[bucket][location]` entry. Raw pixels carry their location in the
-advisory text instead, since the fix differs (`shell` → migrate to Customer
-Events or refire via `onAfterInit`; container → the script won't re-execute at
-all).
+advisory text instead, since the fix differs (`shell` → refire via
+`onAfterInit`; container → the script won't re-execute at all). Per the
+correction above, migrating raw pixels into Customer Events is not an option.
 
 ---
 

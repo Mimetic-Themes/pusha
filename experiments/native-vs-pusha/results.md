@@ -41,7 +41,7 @@ state destroyed.
 ## Move 4 — analytics integrity
 
 - On new-Liquid: `Shopify.analytics.publish` **present**; `Shopify.analytics.page` and `.subscribe` **absent**.
-- Pusha's bridge fires `publish('page_viewed')` **exactly 1× per nav** — no self-double-fire.
+- Pusha's bridge **calls** `publish('page_viewed')` exactly 1× per nav — no self-double-fire. ⚠ This measured our own call sites, not receipt. It is now known that the call is **rejected**: the storefront publish API is [custom events only](https://shopify.dev/docs/api/web-pixels-api/emitting-data), so nothing downstream receives it. The double-count question below is therefore moot for this channel — the real finding is that the channel is empty.
 - Pusha's `analytics.page()` call is a **no-op** here (method absent) — the classic admin-pageview channel doesn't exist on new-Liquid; Pusha's optional-chaining safely skips it.
 - ⚠ **Open**: the theme's `<s-view-event view-event-trigger="connect">` re-fires a typed `PageViewEvent` through `@shopify/standard-events` (a *separate* channel) when it re-mounts on a product swap. Whether that + Pusha's `publish('page_viewed')` **double-count downstream** needs the Web Pixels sandbox / Shopify admin real-time to confirm. Recommended fix if so: on new-Liquid, Pusha's bridge defers to the theme's standard-events (PJAX-safe by construction) instead of also publishing.
 

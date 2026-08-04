@@ -1,8 +1,24 @@
 // Analytics bridge. Re-fires page-view analytics on every PJAX swap so admin
-// reporting, Shopify Customer Events pixels (Meta, GA4, TikTok, Klaviyo, …),
-// and any *direct* GA4 / GTM install in the theme keep working. Without this,
-// every storefront on Pusha silently corrupts merchant data: a PJAX swap is not
-// a browser navigation, so nothing re-fires on its own.
+// reporting and any *direct* GA4 / GTM install in the theme keep working.
+// Without this, every storefront on Pusha silently under-reports: a PJAX swap
+// is not a browser navigation, so nothing re-fires on its own.
+//
+// ⚠ KNOWN GAP — this bridge does NOT reach Web Pixels. Shopify's Web Pixels
+// Manager initializes once per document and is not re-initialized on a soft
+// nav, and `Shopify.analytics.publish` publishes CUSTOM EVENTS ONLY:
+//
+//   "To ensure the quality of standard events, partners and merchants cannot
+//    publish standard events. Shopify.analytics.publish only exposes the
+//    method to publish custom events."
+//   — https://shopify.dev/docs/api/web-pixels-api/emitting-data
+//
+// So publish('page_viewed') and the serialized page-type events below are
+// REJECTED: the call returns false, no pixel receives them, and app pixels
+// (Meta, GA4, TikTok, Klaviyo) stay dark after the first page. The calls are
+// kept because they are harmless no-ops and the lifecycle around them is
+// correct, but they are NOT a working pixel path. The documented route is a
+// namespaced custom event + a merchant-authored custom pixel — not built yet.
+// See README "Analytics & tracking".
 //
 // FOUR bridges, each switchable via the `analytics` config:
 //
@@ -10,22 +26,21 @@
 //   analytics: false                                      → all off
 //   analytics: { shopify, standardEvents, ga4, dataLayer }→ per-bridge control
 //
-//   1. shopify  — Shopify.analytics.page()  + publish('page_viewed')   [admin + Customer Events]
-//                 PLUS the page-type Customer Events the theme serializes as
+//   1. shopify  — Shopify.analytics.page() [admin reporting, classic themes;
+//                 the method is absent on new-Liquid and no-ops there]
+//                 PLUS publish('page_viewed') and the page-type events the
+//                 theme serializes as
 //                   <script type="application/json" data-pusha-analytics-event>
 //                     { "name": "product_viewed", "data": { … } }
 //                   </script>
-//                 On a native load Shopify auto-fires the page-type event
-//                 (product_viewed, collection_viewed, search_submitted,
-//                 cart_viewed, …) per template; on a PJAX swap NOTHING does, so
-//                 only `page_viewed` would otherwise reach Meta/GA4/etc. The
-//                 theme supplies the correct payload per page and Pusha
-//                 re-publishes it. Opt-in per page — no script, no event, so
-//                 Pusha never invents analytics data.
+//                 Those publish() calls are rejected — see the gap above. The
+//                 payload shape is kept correct so it's ready if a supported
+//                 publish path appears. Opt-in per page — no script, no event,
+//                 so Pusha never invents analytics data.
 //   2. ga4      — window.gtag('event','page_view', …). For a *direct* gtag.js
-//                 install in the theme. Leave OFF when GA4 runs through Shopify
-//                 Customer Events (bridge 1 already covers that) — firing both
-//                 double-counts. Off by default.
+//                 install in the theme. Currently the only GA4 path Pusha can
+//                 keep alive across swaps; GA4 routed through Customer Events
+//                 is covered by nothing (see the gap). Off by default.
 //   3. dataLayer— window.dataLayer.push({ event, … }) for GTM. Off by default.
 //   4. standardEvents — @shopify/standard-events PageViewEvent, re-dispatched on
 //                 swap for new-Liquid themes (their page-view-event.js fires only
@@ -33,6 +48,11 @@
 //                 navs). 'auto' by default: no-ops unless the theme ships
 //                 @shopify/standard-events (resolved via the theme's importmap).
 //                 Page-type events self-heal via <s-view-event> — not re-fired here.
+//                 UNVERIFIED whether this channel reaches the web pixel sandbox.
+//                 It is a documented-surface call rather than an internals hack,
+//                 so if the platform bridges it, it's a supported answer to the
+//                 gap above — but that needs the pixel sandbox on a published
+//                 store to confirm. Don't claim it as a pixel fix until then.
 //
 // Every channel is best-effort: absent globals are silent no-ops; nothing here
 // throws or blocks navigation.

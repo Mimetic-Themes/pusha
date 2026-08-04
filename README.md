@@ -9,7 +9,7 @@ A small drop-in runtime that intercepts internal links, swaps the main container
 - Hover/touch prefetch with stale-while-revalidate cache
 - Named transitions, component registry, lifecycle hooks
 - Section Rendering API revalidation for stale-prone regions ("islands")
-- Automatic analytics bridge — Shopify admin + Customer Events, plus `@shopify/standard-events` for new-Liquid themes
+- Analytics bridge — re-fires page-view signals on every swap (see [Analytics & tracking](#analytics--tracking) for what it does and does not reach)
 - Automatic focus restoration + screen-reader announcement on every swap
 - Theme editor co-exists — sections re-init on `shopify:section:load` / `:select`
 
@@ -17,7 +17,21 @@ A small drop-in runtime that intercepts internal links, swaps the main container
 
 > **Status: alpha (`0.1.0`).** This is early, unstable software — expect rough edges, incomplete coverage, and breaking changes in any 0.x release. It has not been proven across a range of production stores. Pin a minor, and test thoroughly on a real store before shipping.
 
-> **No third-party app integration yet.** Pusha has not been built or tested against Shopify apps — app blocks, app embeds, or app-injected `<script>` tags (theme app extensions). Apps that initialize on a full page load won't re-run on a PJAX swap, so app-driven UI can go stale or silent after the first navigation. If a page depends on an app, opt it out of PJAX (`data-no-transition` on links into it, or `pjax: false` globally) until app support lands.
+## Before you ship this
+
+We would not put this on a merchant store without measuring the trade-offs first, and neither should you.
+
+A soft navigation is not a document load. Shopify's platform does a set of things exactly once per document — boots Web Pixels Manager, initializes app scripts, renders every Liquid value on the page against the current request — and a swap silently skips all of it. Pusha takes over some of that work and cannot take over the rest. What it cannot do is where merchant data breaks:
+
+- **Web pixels stop firing.** Anything wired through Customer Events — Meta, GA4, TikTok, Klaviyo, session replay — goes dark after the first page. There is no supported way to fix this from theme code today. Details and the exact reason in [Analytics & tracking](#analytics--tracking). If attribution matters on a route, don't PJAX that route yet.
+- **Apps go stale or silent.** Pusha has not been built or tested against theme app extensions. App blocks inside the swapped region come back as inert HTML with dead JS; app embeds in the persistent shell survive but hold listeners pointing at replaced nodes; app-injected `<script>` tags initialize once and stay quiet after page one. There is no way to wrap code you don't own, so opt those pages out (`data-no-transition` on links into them, or `pjax: false` globally) until app support lands.
+- **The persistent shell freezes at first render.** Header, footer, and anything outside the container keep the Liquid output of whichever page the buyer landed on. Currency, customer state, localization, and cart context in those regions can drift from the current URL. Pusha syncs the head and the container; it does not re-render the shell. [Islands](#islands-section-rendering-api) exist for exactly this and will revalidate a marked region through the Section Rendering API — but you have to identify the stale-prone regions yourself, and anything you miss stays wrong silently.
+
+None of this depends on undocumented platform internals — Pusha reads standard markup and calls documented APIs, so a Shopify deploy is unlikely to break it overnight. The risk is the inverse: the gaps are quiet. Nothing throws. A store can look perfect while its pixels report nothing and its header shows the wrong currency.
+
+So measure before you trust it. On a **published** theme, walk several navigations and confirm what actually arrives: Shopify admin live view, GA4 Realtime, Meta Events Manager, and your app surfaces. A preview or dev environment will not tell you the truth about any of them.
+
+Stores that already carry a dozen apps have enough fragile integration points. Adding a navigation layer that quietly changes when their code runs is a real cost — weigh it honestly against the speed.
 
 ---
 
@@ -50,6 +64,8 @@ For themes with Vite or another bundler:
 ```sh
 npm install github:mimetic-themes/pusha
 ```
+
+> Not published to npm yet. `@mimetic/pusha` does not resolve on the public registry — install from the git URL above, or clone and `npm link`. The `npx @mimetic/pusha init` command in Path A has the same caveat.
 
 Then in your entry file:
 
@@ -139,15 +155,29 @@ A bare number is shorthand for `{ hard: n, soft: n / 4 }`. Omit a template to di
 
 ## Analytics & tracking
 
-A PJAX swap is **not** a browser navigation, so nothing re-fires analytics on its own. Left unhandled, every store on Pusha silently corrupts merchant data — pageviews stop counting, and pixels that drive ad attribution (Meta, GA4, TikTok, Klaviyo) go dark after the first page. The bridge re-fires on every swap. It runs by default (`analytics: true`).
+A PJAX swap is **not** a browser navigation, so nothing re-fires analytics on its own. Left unhandled, every store on Pusha silently under-reports — pageviews stop counting after the first page, and any tracking that keys off a document load goes quiet.
 
-> **Validate this on a real, published store before trusting it.** Customer Events pixels and GA4 DebugView only behave correctly against a published theme with live pixel configs — a preview/dev environment won't tell you the truth. Check Shopify admin live view, GA4 Realtime/DebugView, and Meta Events Manager across a few PJAX navigations.
+> ### ⚠ Known gap: Pusha does not currently reach Web Pixels
+>
+> The channel that app pixels read (Meta, GA4, TikTok, Klaviyo, session replay — anything configured in Shopify admin under Customer Events) is the **web pixel sandbox**, and Pusha does not reach it.
+>
+> Shopify's Web Pixels Manager initializes once per document load and is not re-initialized on a soft navigation. The storefront API Pusha calls, `Shopify.analytics.publish`, [publishes custom events only](https://shopify.dev/docs/api/web-pixels-api/emitting-data):
+>
+> > To ensure the quality of standard events, partners and merchants cannot publish standard events. `Shopify.analytics.publish` only exposes the method to publish custom events.
+>
+> So `publish('page_viewed', …)` and the `data-pusha-analytics-event` payloads below are **rejected** — the call returns `false` and no pixel receives the event. There is no supported theme-side way to publish a standard event on a route change today. Related discussion: [Shopify Developer Community](https://community.shopify.dev/t/a-liquid-partials-experiment/36515).
+>
+> **If your store depends on Customer Events pixels for attribution, do not run Pusha on those routes yet.** Opt them out (`data-no-transition`, or `pjax: false` globally) until this is resolved.
+
+What the bridge does still cover is below. Every channel is best-effort: absent globals are silent no-ops, and nothing here throws or blocks navigation.
+
+> **Validate on a real, published store before trusting any of it.** GA4 DebugView and pixel configs only behave correctly against a published theme — a preview/dev environment won't tell you the truth. Check Shopify admin live view, GA4 Realtime/DebugView, and Meta Events Manager across a few PJAX navigations.
 
 Four independent bridges, switchable via the object form:
 
 ```js
 analytics: {
-  shopify: true,            // admin reporting + Customer Events      (default true)
+  shopify: true,            // Shopify.analytics.page() — classic themes (default true)
   standardEvents: 'auto',   // @shopify/standard-events PageViewEvent (new-Liquid; default 'auto')
   ga4: false,               // direct gtag.js page_view               (default false)
   dataLayer: false,         // GTM dataLayer push                     (default false)
@@ -156,11 +186,13 @@ analytics: {
 
 `analytics: true` is shorthand for `{ shopify: true, standardEvents: 'auto', ga4: false, dataLayer: false }`; `analytics: false` disables everything.
 
-### 1. Shopify (admin + Customer Events) — on by default
+### 1. Shopify (`Shopify.analytics.page()`) — on by default
 
-Every swap re-fires `Shopify.analytics.page()` (admin) and publishes `page_viewed` (Customer Events). But `page_viewed` is generic — on a native load Shopify also auto-fires the **page-type** event (`product_viewed`, `collection_viewed`, `search_submitted`, `cart_viewed`, …) with a full payload, and on a PJAX swap nothing does. Pixels that build catalog/retargeting/conversion data off those events need them re-fired.
+Every swap calls `Shopify.analytics.page()`, the Trekkie/Monorail pageview that feeds Shopify admin reporting on classic themes. On new-Liquid themes this method is **absent** and the call safely no-ops (verified in `experiments/native-vs-pusha/results.md`), so the admin pageview channel is classic-only.
 
-Pusha can't invent those payloads, so the **theme supplies them per page** as a JSON script inside the swapped container (`#MainContent`). Pusha reads it after the swap and re-publishes it. No script → no event, so Pusha never fabricates data:
+The same bridge also calls `Shopify.analytics.publish('page_viewed', …)` and re-publishes any page-type payloads the theme serialized. **Both of those calls are rejected by the platform** — see the gap above. They remain in the code because the surrounding lifecycle is correct and the calls are harmless no-ops, but they are not a working pixel path and should not be counted on. Reaching pixels needs either a platform change or a merchant-authored custom pixel (see below).
+
+The theme supplies page-type payloads as a JSON script inside the swapped container (`#MainContent`). No script → no event, so Pusha never fabricates data:
 
 ```liquid
 {%- comment -%} sections/main-product.liquid (or a snippet rendered inside #MainContent) {%- endcomment -%}
@@ -178,7 +210,9 @@ Pusha can't invent those payloads, so the **theme supplies them per page** as a 
 </script>
 ```
 
-A single object or an array of `{ name, data }` events is accepted. Match Shopify's [standard event payloads](https://shopify.dev/docs/api/web-pixels-api/standard-events) so downstream pixels receive what they expect.
+A single object or an array of `{ name, data }` events is accepted. Match Shopify's [standard event payloads](https://shopify.dev/docs/api/web-pixels-api/standard-events) so the shape is right if and when a supported publish path exists.
+
+**The one documented way to reach pixels on a swap** is a custom event plus a merchant-authored custom pixel. Custom events are publishable from the storefront and are delivered to custom pixels, so a merchant can add a custom pixel in Shopify admin that subscribes to a namespaced event and calls `fbq` / `gtag` itself. This is not wired up in Pusha yet — it is the intended direction, tracked against the gap above. It does not reach *app* pixels: those subscribe to standard events, and a custom event only carries into them as unparsed `customData`.
 
 ### 2. GA4 (direct gtag.js) — opt-in
 
@@ -189,7 +223,7 @@ analytics: { ga4: true }            // generic page_view
 analytics: { ga4: 'G-XXXXXXX' }     // target a stream via send_to (string or array)
 ```
 
-Leave this **off** if GA4 already runs through Shopify Customer Events (bridge 1 covers it) — enabling both double-counts.
+If GA4 runs through Shopify Customer Events rather than a direct gtag.js install, this bridge does not apply — and per the gap above, nothing in Pusha currently re-fires that channel either. A direct gtag.js install in the theme is presently the only GA4 path Pusha can keep alive across swaps. Turning this on alongside a working Customer Events path would double-count, so check which install you actually have before enabling it.
 
 ### 3. GTM (dataLayer) — opt-in
 
@@ -215,6 +249,7 @@ analytics: { standardEvents: false }    // disable
 - **`'auto'` (default)** no-ops on classic themes: if the import doesn't resolve, nothing fires — no effect on JSON-template / section themes.
 - **Page-type events** (`product_viewed`, `collection_viewed`) are **not** re-fired here. The theme's `<s-view-event view-event-trigger="connect">` elements re-fire those when they re-mount in the swapped content, so Pusha touching them would double-count.
 - Independent of bridge 1 — the standard-events channel and `Shopify.analytics.publish` don't cross-forward, so both can run without double-counting the generic pageview.
+- **Unverified: whether this reaches the web pixel sandbox.** `@shopify/standard-events` is resolved from the theme's importmap (it is not on the public npm registry), and re-dispatching `PageViewEvent` is a documented-surface call rather than an internals hack. Whether the platform bridges that channel into Web Pixels has not been tested here — it needs the pixel sandbox on a published store. If it does bridge, this is a supported route to the gap above; if it doesn't, that's the precise thing for Shopify to fix. Do not read this bridge as a pixel fix until someone confirms it.
 
 ---
 
@@ -460,6 +495,8 @@ Built in, not configurable:
 ---
 
 ## Bundle sizes
+
+Measured from a clean `npm run build` on 2026-08-04:
 
 | File | Raw | Gzipped |
 |---|---|---|
