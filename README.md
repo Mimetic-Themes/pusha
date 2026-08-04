@@ -5,7 +5,7 @@
 A small drop-in runtime that intercepts internal links, swaps the main container without a full page reload, and gives storefronts a native-app feel.
 
 - 9.1 kB gzipped (UMD), zero runtime dependencies
-- Built for OS 2.0 themes — JSON templates, sections, **theme blocks** (Horizon-family), and the theme editor
+- Built for OS 2.0 themes — JSON templates, sections, **theme blocks** (`blocks/`), and the theme editor
 - Hover/touch prefetch with stale-while-revalidate cache
 - Named transitions, component registry, lifecycle hooks
 - Section Rendering API revalidation for stale-prone regions ("islands")

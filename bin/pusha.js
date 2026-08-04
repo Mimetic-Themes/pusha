@@ -1039,8 +1039,9 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
     snippets: join(themePath, 'snippets'),
     assets: join(themePath, 'assets'),
     layout: join(themePath, 'layout'),
-    // Block-based theme dirs. `blocks/` is core to OS 2.0 theme blocks (Horizon)
-    // and to the new-Liquid preview; `templates/*.liquid` carry per-page script
+    // Block-based theme dirs. `blocks/` holds OS 2.0 theme blocks — a platform
+    // capability any theme can use, not one theme's convention — and is also
+    // used by the new-Liquid preview; `templates/*.liquid` carry per-page script
     // tags in every paradigm. Walking them is a coverage fix — the section-only
     // scan silently missed block scripts and inline scripts in .liquid templates.
     blocks: join(themePath, 'blocks'),

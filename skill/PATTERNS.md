@@ -774,11 +774,11 @@ Audit step:
    - `routes.cart_add_url`, `/cart/add.js`, `/cart/update.js`, `/cart/change.js`, `/cart/clear.js` in fetch calls
    - A shared cart helper (Dawn: `assets/cart.js`, `assets/cart-drawer.js`, `assets/cart-notification.js`; product-form: `assets/product-form.js`)
 3. **Identify the theme's existing cart-event mechanism** (if any) — this determines which bridge variant to apply:
-   - Dawn-family (Dawn, Horizon-pre-blocks): `assets/pubsub.js` + `PUB_SUB_EVENTS` in `assets/constants.js`
+   - Pubsub convention: `assets/pubsub.js` exporting `subscribe`/`publish`, plus `PUB_SUB_EVENTS` in `assets/constants.js`. Originated in Dawn and inherited by most Dawn-derived themes — detect it by those two files, not by the theme's name.
    - Custom in-theme bus: search for `subscribers`, `eventBus`, `addObserver` etc.
    - No bus at all: theme fires-and-forgets `fetch('/cart/add')`, no UI subscription model — the bridge instruments the fetch directly.
 
-### Variant 1 — Dawn-family bridge (Dawn, Horizon-pre-blocks)
+### Variant 1 — pubsub bridge (themes shipping `assets/pubsub.js`)
 
 The theme already has `pubsub.js` exposing `subscribe()` and `publish()` as globals, plus `PUB_SUB_EVENTS` from `constants.js` (`cartUpdate`, `quantityUpdate`, `variantChange`, `cartError`). Bridge it once on `DOMContentLoaded`:
 
@@ -806,7 +806,7 @@ The skill renders this snippet by inserting `{% render 'pusha-bridges' %}` into 
 
 The mapping from Dawn's `payload` to Pusha's `lastOperation.type` is best-effort — Dawn's internal payload shape varies between `product-form.js` (`source: 'product-form'`) and `cart.js` (`source: 'cart-items'`). Where the type can't be inferred, omit `lastOperation`.
 
-**Caveat — payload shape is version-dependent.** Dawn's `PUB_SUB_EVENTS.cartUpdate` payload is not strongly typed and has drifted between Dawn versions and across Dawn-derived themes (e.g. Horizon-pre-blocks and other forks). Smoke-test the bridge on the actual theme version in use; if a payload field is missing on a given fork, fall back to dispatching `cart:mutated` with `source` only — subscribers must tolerate missing optionals (per the Pusha contract).
+**Caveat — payload shape is version-dependent.** Dawn's `PUB_SUB_EVENTS.cartUpdate` payload is not strongly typed and has drifted between Dawn versions and across the forks that inherited it. Smoke-test the bridge on the actual theme version in use; if a payload field is missing on a given fork, fall back to dispatching `cart:mutated` with `source` only — subscribers must tolerate missing optionals (per the Pusha contract).
 
 ### Variant 2 — Theme without a pubsub (cart fetch instrumentation)
 
