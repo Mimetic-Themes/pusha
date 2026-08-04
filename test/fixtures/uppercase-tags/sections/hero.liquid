@@ -1,0 +1,14 @@
+<section data-section-type="hero">
+  <h2>{{ section.settings.heading }}</h2>
+</section>
+
+{% comment %} Bucket E: procedural inline script written with an uppercase tag. {% endcomment %}
+<SCRIPT>
+  var el = document.querySelector('.hero');
+  if (el) { el.classList.add('ready'); }
+</SCRIPT>
+
+{% comment %} Mixed case — the body extractor must find this close tag too. {% endcomment %}
+<Script>
+  document.querySelector('.hero-sub').addEventListener('click', function () {});
+</Script>

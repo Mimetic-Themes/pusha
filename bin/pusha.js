@@ -215,7 +215,7 @@ function patchContainerElement(themeLiquid, id) {
   const tagPattern = new RegExp(`<(\\w+)([^>]*\\bid=['"]${escapeRegExp(id)}['"][^>]*)>`, 'i');
   const match = themeLiquid.match(tagPattern);
   if (!match) return { themeLiquid, status: 'not-found' };
-  if (/\bdata-page-container\b/.test(match[0])) {
+  if (/\bdata-page-container\b/i.test(match[0])) {
     return { themeLiquid, status: 'already-patched' };
   }
   const replaced = match[0].replace(/>$/, ` ${CONTAINER_ATTRS}>`);
@@ -225,7 +225,7 @@ function patchContainerElement(themeLiquid, id) {
 function patchBodyElement(themeLiquid) {
   const match = themeLiquid.match(/<body([^>]*)>/i);
   if (!match) return { themeLiquid, status: 'not-found' };
-  if (/\bdata-template\b/.test(match[0])) {
+  if (/\bdata-template\b/i.test(match[0])) {
     return { themeLiquid, status: 'already-patched' };
   }
   const replaced = match[0].replace(/>$/, ` data-template="{{ template }}">`);
@@ -718,7 +718,7 @@ function detectPortalClasses(themePath) {
             }
           }
           const fullOpener = openerIdx !== -1 ? text.slice(openerIdx, endIdx + 1) : line;
-          const alreadyMarked = /\bdata-pusha-cleanup\b/.test(fullOpener);
+          const alreadyMarked = /\bdata-pusha-cleanup\b/i.test(fullOpener);
           sites.push({
             file: relative(themePath, liquid),
             line: i + 1,
@@ -887,9 +887,9 @@ function detectLiquidPersistentState(file, themePath) {
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
 
-    if (/<main\b/.test(ln)) inMainContainer = true;
+    if (/<main\b/i.test(ln)) inMainContainer = true;
     const wasInMain = inMainContainer;
-    if (/<\/main\s*>/.test(ln)) inMainContainer = false;
+    if (/<\/main\s*>/i.test(ln)) inMainContainer = false;
 
     const opens = (ln.match(/\{%-?\s*comment\s*-?%\}/g) || []).length;
     const closes = (ln.match(/\{%-?\s*endcomment\s*-?%\}/g) || []).length;
@@ -932,9 +932,9 @@ function detectLiquidPersistentState(file, themePath) {
 const M_PATTERNS = [
   // <details> with click-toggle inside the shell. Dawn's predictive search +
   // mobile drawer use this pattern.
-  { kind: 'details', re: /<details\b[^>]*>/, what: '<details> in persistent shell' },
+  { kind: 'details', re: /<details\b[^>]*>/i, what: '<details> in persistent shell' },
   // <dialog> elements — rare in Shopify themes today, but the pattern is the same.
-  { kind: 'dialog', re: /<dialog\b[^>]*>/, what: '<dialog> in persistent shell' },
+  { kind: 'dialog', re: /<dialog\b[^>]*>/i, what: '<dialog> in persistent shell' },
   // Custom elements whose tag name suggests stateful overlay UI.
   { kind: 'custom-modal', re: /<(\w+-(?:modal|drawer|overlay|popup|search-form|menu-drawer))\b/i, what: 'stateful-named custom element in shell' },
 ];
@@ -959,9 +959,9 @@ function detectShellModals(themePath, shellFiles) {
 
     for (let i = 0; i < lines.length; i++) {
       const ln = lines[i];
-      if (/<main\b/.test(ln)) inMainContainer = true;
+      if (/<main\b/i.test(ln)) inMainContainer = true;
       const wasInMain = inMainContainer;
-      if (/<\/main\s*>/.test(ln)) inMainContainer = false;
+      if (/<\/main\s*>/i.test(ln)) inMainContainer = false;
 
       const opens = (ln.match(/\{%-?\s*comment\s*-?%\}/g) || []).length;
       const closes = (ln.match(/\{%-?\s*endcomment\s*-?%\}/g) || []).length;
@@ -978,7 +978,7 @@ function detectShellModals(themePath, shellFiles) {
         const m = ln.match(p.re);
         if (!m) continue;
         // Skip elements already wired to close on nav.
-        if (/data-pusha-close-on-nav/.test(ln)) continue;
+        if (/data-pusha-close-on-nav/i.test(ln)) continue;
         findings.push({
           file: relative(themePath, file),
           line: i + 1,
@@ -1071,10 +1071,10 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
       const lines = text.split('\n');
       for (let i = 0; i < lines.length; i++) {
         const ln = lines[i];
-        if (/<script[^>]+src=/.test(ln) && !/type=["']application\//.test(ln)) {
+        if (/<script[^>]+src=/i.test(ln) && !/type=["']application\//i.test(ln)) {
           findings.A.push({ file: relative(themePath, file), line: i + 1, match: ln.trim() });
         }
-        if (/<script[^>]+type=["']application\/(ld\+)?json/.test(ln)) {
+        if (/<script[^>]+type=["']application\/(ld\+)?json/i.test(ln)) {
           findings.B.push({ file: relative(themePath, file), line: i + 1, match: ln.trim() });
         }
       }
@@ -1099,7 +1099,7 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
       const lines = text.split('\n');
       for (let i = 0; i < lines.length; i++) {
         const ln = lines[i];
-        if (/<script[^>]*>/.test(ln) && !/src=/.test(ln) && !/application\/(ld\+)?json/.test(ln)) {
+        if (/<script[^>]*>/i.test(ln) && !/src=/i.test(ln) && !/application\/(ld\+)?json/i.test(ln)) {
           findings.E.push({ file: relative(themePath, file), line: i + 1, match: ln.trim() });
         }
       }
@@ -1338,13 +1338,17 @@ function inlineScriptIsConfigOnly(absFile, lineNum) {
   for (let i = lineNum - 1; i < lines.length; i++) {
     const ln = lines[i];
     if (!started) {
-      const open = ln.match(/<script[^>]*>/);
+      const open = ln.match(/<script[^>]*>/i);
       if (!open) { if (i === lineNum - 1) continue; break; }
       const after = ln.slice(ln.indexOf(open[0]) + open[0].length);
-      if (/<\/script>/.test(after)) { body += after.slice(0, after.indexOf('</script>')); break; }
+      // search() not indexOf() — the close tag may be cased differently
+      // from the literal, same as the open tag above.
+      const closeInTail = after.search(/<\/script>/i);
+      if (closeInTail !== -1) { body += after.slice(0, closeInTail); break; }
       body += after; started = true; continue;
     }
-    if (/<\/script>/.test(ln)) { body += '\n' + ln.slice(0, ln.indexOf('</script>')); break; }
+    const closeOnLine = ln.search(/<\/script>/i);
+    if (closeOnLine !== -1) { body += '\n' + ln.slice(0, closeOnLine); break; }
     body += '\n' + ln;
   }
   return !/\(/.test(body);
@@ -1439,7 +1443,7 @@ function detectPartials(themePath) {
 // there at all), conformance (is it well-formed), placement (is it inside the
 // swap container), plus raw pixels that bypass Customer Events entirely.
 
-const MARKER_RE = /<script([^>]*\bdata-pusha-analytics-event\b[^>]*)>([\s\S]*?)<\/script>/g;
+const MARKER_RE = /<script([^>]*\bdata-pusha-analytics-event\b[^>]*)>([\s\S]*?)<\/script>/gi;
 
 // Page-type events Shopify auto-fires on a native load and nothing re-fires on a
 // swap. `probes` are path prefixes: coverage is asserted only when the theme
@@ -1499,7 +1503,7 @@ function detectAnalyticsSurface(themePath, shellRelSet) {
         // The runtime finds the script by attribute regardless of type, but the
         // BROWSER parses a type-less <script> as JavaScript and throws on the
         // JSON body. Page-breaking, not merely a data bug.
-        if (!/type\s*=\s*["']application\/json["']/.test(attrs)) {
+        if (!/type\s*=\s*["']application\/json["']/i.test(attrs)) {
           findings.push({ kind: 'conformance', rank: 'gap', ...site,
             what: 'missing type="application/json" — the browser executes the body as JavaScript' });
         }

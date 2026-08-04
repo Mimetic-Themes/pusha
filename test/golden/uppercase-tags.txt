@@ -1,0 +1,139 @@
+# pusha audit
+theme: <FIXTURE>
+whitelists: on (default — pass --no-whitelist to disable)
+
+## A. External <script src> — safe
+  Safe. External <script src> tags are re-loaded by Pusha's syncHeadScripts on every nav.
+  layout/theme.liquid:6: <SCRIPT SRC="{{ 'legacy.js' | asset_url }}" defer></SCRIPT>
+
+## B. JSON data <script type="application/(ld+)?json"> — safe
+  Safe. JSON data blocks are non-executable.
+  sections/footer.liquid:6: <SCRIPT TYPE="application/json" data-footer-config>
+  sections/main-collection.liquid:10: <SCRIPT TYPE="application/json" data-pusha-analytics-event>
+
+## C. Custom elements — safe (verify)
+  Safe (verify). Custom elements with disconnectedCallback clean up automatically.
+  (none)
+
+## D. Custom elements — needs cleanup
+  Needs cleanup. Add disconnectedCallback OR wrap the section so registry.destroy can fire.
+  (none)
+
+## E. Procedural inline <script> — wrap by location
+  Procedural inline script that must re-run on each PJAX swap. The correct fix depends on where it lives — see "Fix by location" below.
+  sections/hero.liquid:6: <SCRIPT>  [section]
+  sections/hero.liquid:12: <Script>  [section]
+  Fix by location:
+    · section     → sectionInits['<handle>'] = (root) => {…}; scope queries to root.
+
+## F. {% javascript %} blocks — F1 safe, F2 wrap by location
+  F1 (custom element class) is already safe. F2 (procedural {% javascript %}) must re-run per swap — fix by location, see below.
+  (none)
+
+## G. DOMContentLoaded handlers — replace by location
+  DOMContentLoaded does not re-fire after PJAX swaps. The replacement depends on where the handler lives — see "Fix by location" below.
+  assets/legacy.js:3: document.addEventListener('DOMContentLoaded', function () {  [asset]
+  Fix by location:
+    · asset       → Global asset — replace DOMContentLoaded with onFirstLoad, or move into a custom element.
+
+## H. Module-level state — hard, human review
+  Human review. Module-level state and IIFEs hold closures that don't replay on swap. Check reachability — dead code can be deleted; live code needs refactor.
+  (none)
+
+## K. Portal-to-body custom elements — add data-pusha-cleanup
+  Portal-to-body custom element. Survives PJAX swaps because connectedCallback moves it outside the swap container. Add `data-pusha-cleanup` to every render site so Pusha removes it before each nav.
+  (none)
+
+## L. Liquid persistent state — request-scoped Liquid in the layout shell
+  Per-request Liquid in the layout shell (layout/theme.liquid, section groups, transitively-rendered snippets) freezes on first load. Sub-letters mirror the request-scoped taxonomy: A=URL/template, B=customer, C=cart, D=locale, E=per-page object, F=personalization, G=time, H=app-injected. Rank: auto=URL-derivable in JS, ask=user decides (full-reload boundary or section refetch), ok=already handled by Pusha or theme convention.
+  layout/theme.liquid:2: [L-A auto] request.*
+      <HTML lang="{{ request.locale.iso_code }}">
+
+## M. Persistent-shell stateful UI — close-on-nav opt-in
+  Persistent-shell stateful UI — modals/drawers/overlays that lived outside #MainContent and were authored assuming a full reload would dismiss them. Three remediation options: (1) add `data-pusha-close-on-nav` to the root (Pusha strips `[open]` / sets `aria-expanded="false"` / removes body classes listed in `data-pusha-body-class-on-open`); (2) implement a `closeOnNav()` method on the custom element; (3) call `Pusha.onBeforeLeave(() => this.close())` manually. Cart drawers and persistent widgets simply omit the marker — opt-in is the safe default.
+  Stateful elements in persistent shell (add data-pusha-close-on-nav, or implement closeOnNav()):
+    layout/theme.liquid:10: [M details] <details> in persistent shell
+        <DETAILS class="mobile-nav">
+    layout/theme.liquid:15: [M dialog] <dialog> in persistent shell
+        <DIALOG id="promo">Promo</DIALOG>
+
+## J. Analytics surface
+  Analytics surface. Pusha re-publishes page-type Customer Events from theme-serialized <script type="application/json" data-pusha-analytics-event> blocks — hand-written Liquid that nothing validates at runtime, so drift is silent. Four kinds: coverage (a product/collection/search/cart page with no marker loses its event on every swap), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and republishes one page's payload forever), and raw-pixel (gtag/fbq/dataLayer calls that bypass Customer Events, so the bridge can't re-fire them — migrate them into Customer Events, or refire manually from onAfterInit).
+  Serialized events:
+    sections/main-collection.liquid:10: collection_viewed  [section]
+
+## P. Partials — server-rendered refresh regions (informational)
+  Informational — {% partial %} + @shopify/partial-rendering regions (new-Liquid's islands substrate). The inventory maps each partial to its consumers. The partial name is a load-bearing string contract (renaming a declaration breaks every consumer), and Pusha must coordinate its container swap with the theme's partials.apply() so a nav mid-refresh has defined ordering.
+  (none)
+
+## Summary
+  A external src refs:           1
+  B JSON / ld+json data blocks:  2
+  C/D custom elements:           0  (safe: 0, cleanup-candidate: 0)
+  E procedural inline scripts:   2
+  F {% javascript %} blocks:     0  (F1 safe: 0, F2 wrap: 0)
+  G DOMContentLoaded handlers:   1
+  H module-level state:          0
+  K portal-to-body classes:      0  (0 render site(s) need data-pusha-cleanup)
+  L Liquid persistent state:     1  (auto: 1, ask: 0, ok: 0)
+  M persistent-shell stateful UI: 2  (modals: 2, body-class lockouts: 0)
+  J analytics surface:           0  (gaps: 0, advisory: 0)
+  P partials:                    0
+
+## Suppressed by whitelists
+  (none — no findings matched a whitelist in this run)
+
+## Active whitelists
+  files — Skip Pusha's own bundled files — pusha.liquid is framework config (E false positive), pusha.min.js is the runtime (G/H false positives).
+    skips: pusha.liquid, pusha.min.js, pusha.esm.js
+  H — Suppress H findings for canonical Pusha patterns (sectionInits/sectionDestroy registrations, the window.theme bootstrap shim, runtime config). These ARE the recommended patterns; flagging them would mean every successfully-ported theme shows H findings forever.
+    drop /^window\.theme\s*=\s*window\.theme\s*\|\|/  (window.theme bootstrap shim)
+    drop /^window\.theme\.sectionInits\s*=/  (sectionInits container init)
+    drop /^window\.theme\.sectionDestroy\s*=/  (sectionDestroy container init)
+    drop /^window\.theme\.sectionInits\[/  (individual sectionInits registration)
+    drop /^window\.theme\.sectionDestroy\[/  (individual sectionDestroy registration)
+    drop /^window\.theme\.config\s*=/  (Pusha runtime config)
+  G — Suppress G findings (DOMContentLoaded handlers) in files that also call window.Pusha.on* hooks. These are typically the "fallback" branch of an `if (window.Pusha) { ... } else { addEventListener("DOMContentLoaded", ...) }` pattern — dead code on Pusha-loaded themes, kept defensively.
+    skip a file's G findings if it also calls window.Pusha.on*
+  Pass --no-whitelist to disable all of the above and see raw findings.
+
+## Next steps
+  An agent reading this audit can transform the findings without the pusha skill installed.
+  Suggested order:
+    1. K   (mechanical: add data-pusha-cleanup attribute to each render site listed above)
+    2. F2  (procedural {% javascript %} — apply the fix for its [location] tag, see "Fix by location")
+    3. E   (procedural inline <script> — same, routed by its [location] tag)
+    4. G   (DOMContentLoaded — replace per its [location] tag, see "Fix by location")
+    5. D   (add disconnectedCallback or wrap as a section to reach registry.destroy)
+    6. H   (human review — these are the risky ones; check reachability first)
+
+  Transformation contracts by location (every E/F2/G/H finding carries a [location] tag):
+    section     — data-section-type="<handle>" on the root; window.theme.sectionInits[handle] = (root) => {…};
+                  rewrite document.query* → root.query*; guard listeners with data-initialized.
+    block       — promote to a custom element (connected/disconnectedCallback); the browser re-mounts it.
+    template    — a custom element, or an onAfterInit((c, meta) => …) hook keyed on meta.template.
+    shell       — runs once and persists across navs; use onFirstLoad / setupGlobal, never sectionInits.
+    head-config — inert config (no call expressions); leave as-is, it is PJAX-safe.
+
+  A and B need no action. C is safe but verify external refs are tracked.
+  Re-run with --json for structured output a tool can consume directly.
+
+## Skill freshness
+  CLI is @mimetic/pusha@0.1.0.
+  No installed skill files found at standard paths (.claude/skills/pusha/, .cursor/rules/pusha.md, .aider-conventions.md).
+  Run `pusha skill --claude` (or --cursor / --aider) to install one.
+
+## Where to find more
+  PATTERNS.md — full transformation patterns, edge cases, decision trees
+  SKILL.md    — end-to-end porter procedure (audit → delegate → diff → review)
+
+  After `npm install github:mimetic-themes/pusha`:
+    node_modules/@mimetic/pusha/skill/{SKILL.md, PATTERNS.md}
+
+  Or via this CLI:
+    pusha audit --full                  (append PATTERNS.md to this report)
+    pusha skill --print                 (dump both to stdout)
+    pusha skill --claude                (→ .claude/skills/pusha/)
+    pusha skill --cursor                (→ .cursor/rules/pusha.md)
+    pusha skill --aider                 (→ .aider-conventions.md)
+    add --global to install into ~/ instead of project-local

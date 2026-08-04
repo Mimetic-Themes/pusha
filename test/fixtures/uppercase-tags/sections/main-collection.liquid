@@ -1,0 +1,20 @@
+<div data-section-type="main-collection" data-section-id="{{ section.id }}">
+  <h1>{{ collection.title }}</h1>
+</div>
+
+{%- comment -%}
+  Bucket J: a well-formed analytics marker written with an uppercase tag.
+  MARKER_RE must match it, otherwise the audit reports this page as having
+  no event coverage when it actually has a correct one.
+{%- endcomment -%}
+<SCRIPT TYPE="application/json" data-pusha-analytics-event>
+  {
+    "name": "collection_viewed",
+    "data": {
+      "collection": {
+        "id": "{{ collection.id }}",
+        "title": "{{ collection.title }}"
+      }
+    }
+  }
+</SCRIPT>

@@ -1,0 +1,23 @@
+<!doctype html>
+<HTML lang="{{ request.locale.iso_code }}">
+<HEAD>
+  <TITLE>{{ page_title }}</TITLE>
+  {{ content_for_header }}
+  <SCRIPT SRC="{{ 'legacy.js' | asset_url }}" defer></SCRIPT>
+</HEAD>
+<BODY>
+  {% comment %} Persistent shell: uppercase stateful UI must still reach bucket M. {% endcomment %}
+  <DETAILS class="mobile-nav">
+    <SUMMARY>Menu</SUMMARY>
+    <a href="/collections/all">All</a>
+  </DETAILS>
+
+  <DIALOG id="promo">Promo</DIALOG>
+
+  <MAIN id="MainContent" data-page-container data-page-type="{{ template }}">
+    {{ content_for_layout }}
+  </MAIN>
+
+  {% section 'footer' %}
+</BODY>
+</HTML>
