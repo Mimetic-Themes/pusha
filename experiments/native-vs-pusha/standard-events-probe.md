@@ -271,6 +271,35 @@ Fill in counts **per navigation**, and note which frame you read them in.
 | pass | ≥1 per nav | ≥1 per nav | Something other than the bridge is publishing — likely `<s-view-event>` re-mounts. Arm 1's result is not attributable to Pusha; investigate before claiming anything. |
 | fail | — | — | Pusha bug. Fix the bridge, then re-run. Not a platform finding. |
 
+## Documented-surface check (2026-08-04)
+
+Done before reporting anything publicly, so the finding can't be answered with
+"you missed the docs."
+
+Swept the full shopify.dev docs corpus and asked the shopify.dev assistant.
+Both agree:
+
+- There is **no documented way** for Online Store theme or storefront JS to
+  publish or re-trigger a standard web pixel event. `Shopify.analytics.publish`
+  is custom-events only by design.
+- `@shopify/standard-events` is documented as a **DOM event vocabulary** for
+  themes and apps — dispatch `shopify:*`, listen with `addEventListener`. It has
+  **no documented relationship to the Web Pixels sandbox**. The bridge was never
+  specified to reach pixels; this is an absent feature, not a broken one.
+- Hydrogen's `Analytics.Provider` / `sendShopifyAnalytics` send to Shopify's
+  analytics backend and to your own in-app integrations. They are **not**
+  documented as reaching web pixels, so Hydrogen is not a precedent for
+  soft-nav pixel delivery.
+- Web Pixels Manager's once-per-document initialization is consistent with how
+  `init` is described but is **not stated as a formal contract**, and
+  client-side navigation behavior for Online Store themes is undocumented
+  entirely.
+
+⚠ The assistant referred to the package as `@theme/standard-events`. That is
+wrong — the importmap in `base-theme-next/layout/theme.liquid:7` has exactly one
+entry, `@shopify/standard-events`, pointing at
+`https://cdn.shopify.com/storefront/standard-events.js`.
+
 ## After
 
 - Restore `analytics: true` in `snippets/pusha-config.liquid` (see the comment
