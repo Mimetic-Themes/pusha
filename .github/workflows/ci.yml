@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floors declared in package.json `engines`, plus current.
+        # If one of these fails, `engines` is wrong and the README lies.
+        node: ['20.19', '22.13', '24']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      # `prepare` builds dist/ as part of install — same path a consumer hits.
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  consumer-install:
+    name: install as a consumer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+
+      # Pusha is not on a registry: every install builds from source via
+      # `prepare`. This guards that path — a packed artifact missing dist/,
+      # or a `files` entry that drops a needed directory, fails here rather
+      # than in someone's theme.
+      - name: pack and install into a clean project
+        run: |
+          TARBALL="$(npm pack --silent | tail -1)"
+          mkdir -p /tmp/consumer && cd /tmp/consumer
+          echo '{"name":"consumer","version":"1.0.0","type":"module"}' > package.json
+          npm install "$GITHUB_WORKSPACE/$TARBALL"
+
+      - name: runtime, every subpath, and the CLI must all resolve
+        run: |
+          cd /tmp/consumer
+          node -e "
+            const subpaths = ['', '/registry', '/hooks', '/transitions',
+                              '/prefetch', '/islands', '/active-links', '/diagnostics'];
+            Promise.all(subpaths.map(s => import('@mimetic/pusha' + s)))
+              .then(([main]) => {
+                if (typeof main.initRuntime !== 'function') {
+                  throw new Error('initRuntime missing from main entry');
+                }
+                console.log('all ' + subpaths.length + ' entry points resolved');
+              })
+              .catch(e => { console.error(e); process.exit(1); });
+          "
+          ./node_modules/.bin/pusha --version
