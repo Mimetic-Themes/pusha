@@ -1034,3 +1034,81 @@ test('checkContainer ignores section wrappers that contain a custom-element desc
   assert.ok(message.includes('shopify-section-bare'), 'bare section with a script IS flagged');
   assert.ok(!message.includes('shopify-section-with-ce'), 'section wrapping a custom element is NOT flagged');
 });
+
+// ─── standardEvents bridge ──────────────────────────────────────────────────
+// Coverage note: these tests pin the FAIL-SAFE half of the bridge only — that a
+// theme without @shopify/standard-events (every classic OS 2.0 theme, and this
+// Node environment) degrades silently and never breaks navigation.
+//
+// The positive path — that a resolvable module gets a PageViewEvent dispatched
+// on every swap — is NOT covered here, because the specifier is resolved through
+// the *theme's* importmap at runtime and there is no honest way to fake that in
+// jsdom without either shipping a fake @shopify package into node_modules or
+// making the specifier injectable in production code. It is verified by hand
+// instead: see experiments/native-vs-pusha/standard-events-probe.md, Stage A.
+//
+// Until that probe runs, "the bridge dispatches correctly" is an inference from
+// reading the code, not an observed fact. Don't let these green tests suggest
+// otherwise.
+
+test('standardEvents: a missing @shopify/standard-events module never breaks navigation', async () => {
+  // Node cannot resolve the specifier, so the dynamic import rejects — the same
+  // shape as a classic theme with no importmap entry.
+  (window as unknown as { theme: { config: Record<string, unknown> } }).theme = {
+    config: { analytics: { shopify: true, standardEvents: true } },
+  };
+
+  const warns: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warns.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+  };
+
+  try {
+    runtime.initRuntime();
+    document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+    await new Promise((r) => setTimeout(r, 100));
+  } finally {
+    console.warn = origWarn;
+  }
+
+  // The swap completed and the other bridges still fired.
+  assert.equal(document.querySelector('#MainContent')?.getAttribute('data-page-type'), 'product');
+  assert.deepEqual(analyticsPublishCalls, ['page_viewed']);
+  // The rejected import is swallowed by design — no warning, no throw.
+  assert.equal(
+    warns.filter((w) => w.includes('standard-events') || w.includes('PageViewEvent')).length,
+    0,
+    'a missing standard-events module is a silent no-op, not a warning',
+  );
+});
+
+test('standardEvents: false leaves the rest of the analytics bridge intact', async () => {
+  (window as unknown as { theme: { config: Record<string, unknown> } }).theme = {
+    config: { analytics: { shopify: true, standardEvents: false } },
+  };
+
+  runtime.initRuntime();
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.equal(analyticsPageCalls, 1);
+  assert.deepEqual(analyticsPublishCalls, ['page_viewed']);
+});
+
+test('analytics: false disables every bridge, standardEvents included', async () => {
+  // Regression guard for a real footgun: `analytics: false` plus a top-level
+  // `standardEvents: true` reads like "keep the standard-events bridge on" and
+  // does the opposite. standardEvents is nested inside `analytics`, and there is
+  // no top-level key of that name.
+  (window as unknown as { theme: { config: Record<string, unknown> } }).theme = {
+    config: { analytics: false, standardEvents: true },
+  };
+
+  runtime.initRuntime();
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.equal(analyticsPageCalls, 0, 'analytics: false disables the Shopify bridge');
+  assert.deepEqual(analyticsPublishCalls, [], 'and the publish calls with it');
+});

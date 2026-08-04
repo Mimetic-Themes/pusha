@@ -1,0 +1,190 @@
+# Standard-events probe — does the PageViewEvent bridge reach Web Pixels?
+
+**Status:** procedure written 2026-08-04, **not yet run**.
+
+## The question
+
+Pusha's `standardEvents` bridge re-dispatches a `PageViewEvent` through
+`@shopify/standard-events` on every PJAX swap (`src/analytics.ts`,
+`fireStandardEvents`). Nobody has ever observed whether that reaches the Web
+Pixels sandbox.
+
+It matters because it is the only channel Pusha has left. The other path —
+`Shopify.analytics.publish('page_viewed', …)` — is
+[rejected by the platform](https://shopify.dev/docs/api/web-pixels-api/emitting-data):
+storefront publish is custom-events only, so standard event names never arrive.
+See README "Analytics & tracking".
+
+Two outcomes, both worth having:
+
+- **Arrives** → there is a supported, documented-surface route to pixels on
+  new-Liquid themes, with no WPM internals involved. That is a real answer to
+  the gap and worth publishing.
+- **Doesn't arrive** → the precise, measured platform ask: standard-events is
+  dispatch-only and is not bridged into Web Pixels on soft navigation.
+
+## Why it runs in two stages
+
+`loadStandardEvents()` swallows its own import failure:
+
+```ts
+try { standardEventsModule = await import(STANDARD_EVENTS_SPECIFIER); }
+catch { standardEventsModule = null; }
+```
+
+Correct as production defense, fatal for a single-stage experiment: a broken
+import and a platform that doesn't forward produce **identical** observations
+(nothing in the sandbox) and imply opposite next steps. Stage A rules out the
+former before Stage B measures the latter.
+
+There is also **no test coverage** for this bridge — `grep -rln
+"standardEvents\|PageViewEvent" test/` returns nothing — so "it is wired
+correctly" is, until Stage A passes, an inference from reading the code.
+
+## Prerequisites (verified 2026-08-04, no action needed)
+
+| Check | State |
+|---|---|
+| `assets/pusha.min.js` in base-theme-next matches a fresh build | ✅ byte-identical, `sha256 8a252d25…` |
+| That build contains the bridge | ✅ `PageViewEvent` present in the minified UMD |
+| Dynamic `import()` survived minification | ✅ `import(Ft)` present — Vite did not rewrite it |
+| Theme importmap resolves the specifier | ✅ `layout/theme.liquid:7` → `https://cdn.shopify.com/storefront/standard-events.js` |
+| That URL serves | ✅ HTTP 200, 7.7 kB |
+| `firePageView()` runs on every swap | ✅ `src/runtime.ts:366` |
+
+## Config
+
+`snippets/pusha-config.liquid` in base-theme-next is already set up. One line
+switches arms:
+
+```js
+var PROBE_STANDARD_EVENTS = true;   // arm 1: true    arm 2 (control): false
+```
+
+which feeds:
+
+```js
+analytics: { shopify: false, standardEvents: PROBE_STANDARD_EVENTS },
+```
+
+`shopify: false` removes the rejected `publish()` calls so anything reaching a
+pixel can only have come through standard-events.
+
+> **Trap:** `standardEvents` is nested inside `analytics`. It is not a top-level
+> `PushaConfig` key, and `analytics: false` disables it along with every other
+> bridge. Both of these silently disable the thing under test:
+> ```js
+> analytics: false, standardEvents: true   // top-level key ignored
+> analytics: false                         // all four bridges off
+> ```
+
+## Procedure
+
+### 0. Publish
+
+```sh
+cd ~/Work/base-theme-next
+shopify theme push --store <your-dev-store>.myshopify.com
+```
+
+Then **publish it as the live theme** in admin (Online Store → Themes →
+Actions → Publish). Custom pixels only run on the published theme —
+`shopify theme dev` will show nothing and read as a false negative.
+
+### Stage A — does Pusha dispatch at all? (top frame, no pixel needed)
+
+Open the storefront, DevTools console, **top frame** (not the sandbox iframe).
+
+1. Confirm the module resolves:
+
+   ```js
+   await import('@shopify/standard-events')
+   ```
+
+   Expect a module object. A rejection means the importmap isn't reaching the
+   page — stop, that's a Pusha/theme bug, not a platform answer.
+
+2. Tap every dispatch, name-agnostic:
+
+   ```js
+   const orig = document.dispatchEvent.bind(document);
+   document.dispatchEvent = (e) => {
+     if (!/^(pointer|mouse|key|touch|scroll|visibility)/.test(e.type)) {
+       console.log('[tap]', e.type);
+     }
+     return orig(e);
+   };
+   ```
+
+3. Soft-navigate: collection → product → another product, via in-theme links.
+
+**Pass:** a page-view event type appears in `[tap]` on each swap.
+**Fail:** nothing. Stop — the bridge is broken and the finding is ours to fix,
+not Shopify's.
+
+### Stage B — does it reach the sandbox?
+
+1. Admin → Settings → Customer events → **Add custom pixel**. Name it `probe`.
+   Paste:
+
+   ```js
+   analytics.subscribe('all_events', (event) => {
+     const path = event.context?.document?.location?.pathname;
+     console.log('[probe]', event.name, path);
+   });
+   ```
+
+   Save and connect it. If consent gating is on for the store, grant consent
+   before testing.
+
+2. **Find the sandbox console.** The pixel's `console.log` lands in the
+   web-pixels sandbox iframe, *not* the top frame. In DevTools, switch the
+   console's JavaScript-context dropdown from `top` to the web-pixels frame.
+   Optionally add `navigator.sendBeacon('<request-bin-url>', event.name)` to the
+   pixel so you get an external log you can screenshot.
+
+3. **Control — hard load.** Load a product page fresh (full reload). Expect
+   `page_viewed` and `product_viewed` in `[probe]`. If they don't appear, the
+   receiver isn't wired; fix that before reading anything else.
+
+4. **Measure.** From that page, soft-navigate several times and watch `[probe]`.
+
+5. **Arm 2 (the control that makes a positive publishable).** Set
+   `PROBE_STANDARD_EVENTS = false`, re-push, repeat the identical walk.
+
+   This matters because the theme's own
+   `<s-view-event view-event-trigger="connect">` elements re-mount inside
+   swapped content and fire on their own. Without arm 2 you cannot tell Pusha's
+   bridge from the theme's own elements, and that is the first thing a reviewer
+   would ask.
+
+## Results
+
+Fill in counts **per navigation**, and note which frame you read them in.
+
+| Arm | Event | Hard load (control) | Per soft nav |
+|---|---|---|---|
+| A — dispatch tap (top frame) | page-view type | | |
+| 1 — `standardEvents: true` | `page_viewed` | | |
+| 1 — `standardEvents: true` | `product_viewed` | | |
+| 2 — `standardEvents: false` | `page_viewed` | | |
+| 2 — `standardEvents: false` | `product_viewed` | | |
+
+## Reading the result
+
+| Stage A | Arm 1 `page_viewed` | Arm 2 `page_viewed` | Conclusion |
+|---|---|---|---|
+| pass | ≥1 per nav | 0 | **The platform bridges standard-events into Web Pixels.** Supported route exists on new-Liquid. Pusha's docs and the forum thread should say so. |
+| pass | 0 | 0 | **Standard-events is dispatch-only, not bridged.** This is the platform ask, measured. Nothing in theme code can close it. |
+| pass | ≥1 per nav | ≥1 per nav | Something other than the bridge is publishing — likely `<s-view-event>` re-mounts. Arm 1's result is not attributable to Pusha; investigate before claiming anything. |
+| fail | — | — | Pusha bug. Fix the bridge, then re-run. Not a platform finding. |
+
+## After
+
+- Restore `analytics: true` in `snippets/pusha-config.liquid` (see the comment
+  block in that file).
+- Record the outcome in `results.md` under a new "Move 5" heading.
+- If the result is publishable either way, it belongs in the
+  [Liquid partials thread](https://community.shopify.dev/t/a-liquid-partials-experiment/36515) —
+  a second independent implementation hitting the same wall is a materially
+  stronger case than one.
