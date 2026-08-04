@@ -1,6 +1,40 @@
 # Standard-events probe — does the PageViewEvent bridge reach Web Pixels?
 
-**Status:** procedure written 2026-08-04, **not yet run**.
+**Status:** written 2026-08-04. **Stage A run and PASSED 2026-08-04.** Stage B
+pending.
+
+## Stage A result — the bridge executes (2026-08-04)
+
+Run on `new-liquid-rislfwnm.myshopify.com`, arm 1
+(`analytics: { shopify: false, standardEvents: true }`).
+
+- `await import('@shopify/standard-events')` returned a populated `Module`
+  (`CartDiscountUpdateEvent`, `CartErrorEvent`, … ) — the theme importmap
+  resolves at runtime.
+- The dispatch tap logged **exactly one `shopify:page:view` per swap**, across
+  five navigations (index→collection, collection→product, product→page,
+  page→collection, collection→product, product→index).
+- Each one landed *after* `[pusha/nav] ✓` — the signature of the
+  `void fireStandardEvents(meta)` fire-and-forget path.
+
+`shopify:page:view` **is** `PageViewEvent`'s type string. Confirmed inside the
+CDN module: ``const S = `${d}page:view` `` with `d = "shopify:"`, consumed by
+`super(S, e)` in the class constructor. Neither Pusha's source nor
+base-theme-next contains that literal, so it can only originate in the module —
+and on a swap, only `fireStandardEvents` constructs one (the theme's
+`page-view-event-init.js` fires solely on `DOMContentLoaded`).
+
+**Conclusion:** the bridge dispatches correctly. A null result in Stage B can
+now be attributed to the platform, which is the whole reason Stage A exists.
+
+**Bonus:** one dispatch per swap, never two — the self-double-fire half of the
+open question at `results.md:46`, for the page-view channel.
+
+**Two limits on this result.** The tap patches `document.dispatchEvent`, so it
+sees events fired *on* document and not ones bubbling from elements — the
+theme's `<s-view-event>` elements dispatch on themselves and were invisible
+here, leaving the cross-channel double-count question open. And dispatching is
+not receipt; Stage B is still the question.
 
 ## The question
 
