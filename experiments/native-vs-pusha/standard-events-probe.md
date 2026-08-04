@@ -27,11 +27,30 @@ dead subscription. The receiver worked; the page-view events never came.
 
 ### Two further findings
 
-**Shopify's own instrumentation has the same gap.** `product_viewed` also never
-arrived. Pusha deliberately does not re-fire page-type events — those come from
-the theme's `<s-view-event view-event-trigger="connect">` elements re-mounting
-in swapped content. So the platform's own new-Liquid view-event components don't
-reach pixels on a soft navigation either. This is not a Pusha-shaped problem.
+**Shopify's own instrumentation has the same gap — confirmed, not inferred.**
+`product_viewed` never arrived either. Pusha deliberately does not re-fire
+page-type events, so that one comes from the theme's own
+`<s-view-event view-event-trigger="connect">` elements re-mounting in swapped
+content.
+
+A capturing listener on `document` (which catches events dispatched on
+descendants whether or not they bubble) confirms both events *do* fire on a
+swap:
+
+```js
+['shopify:page:view','shopify:product:view','shopify:collection:view'].forEach(t =>
+  document.addEventListener(t, () => console.log('[evt]', t, location.pathname), true));
+```
+
+```
+[evt] shopify:page:view      /products/the-collection-snowboard-liquid
+[evt] shopify:product:view   /products/the-collection-snowboard-liquid
+```
+
+So this is not "the theme's components fail to re-fire." They fire correctly.
+Nothing receives them. The platform's own new-Liquid view-event components have
+the same gap on any soft navigation — this is not a Pusha-shaped problem, and
+not a third-party-runtime problem.
 
 **WPM's document-level listeners survive the swap.** The steady `clicked`
 traffic proves Web Pixels Manager is alive and listening on the page after a

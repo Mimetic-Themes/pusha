@@ -66,6 +66,9 @@ Two consequences beyond Pusha:
 1. `product_viewed` failing too means the theme's own
    `<s-view-event view-event-trigger="connect">` elements don't reach pixels on
    a swap either. Shopify's own new-Liquid instrumentation has the same gap.
+   **Confirmed with a capturing `document` listener**: both `shopify:page:view`
+   (Pusha's bridge) and `shopify:product:view` (the theme's element) fire on
+   every swap. They fire correctly; nothing receives them.
 2. Steady `clicked` traffic proves WPM's document-level listeners survive the
    swap. The infrastructure is alive; what's missing is a route from
    standard-events plus a page-view trigger that isn't once-per-document.
