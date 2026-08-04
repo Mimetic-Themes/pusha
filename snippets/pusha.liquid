@@ -1,0 +1,78 @@
+{%- comment -%}
+  Pusha runtime — Path A install.
+
+  Drop dist/pusha.min.js into assets/, this file into snippets/, then add
+  {% render 'pusha' %} to layout/theme.liquid <head>.
+
+  IMPORTANT — load order: render this snippet BEFORE any other deferred
+  <script src=> in <head>. Deferred scripts execute in document order, so if
+  Pusha loads after other scripts, those scripts will see `window.Pusha` as
+  undefined when their `if (window.Pusha)` guards run, and silently fall
+  through to non-Pusha fallback paths (DOMContentLoaded handlers, etc.) —
+  Pusha is effectively disabled for them. `pusha init` places this correctly;
+  if you're moving the render tag manually, put it near the top of <head>.
+
+  To customise behaviour, populate window.theme.config BEFORE this render tag.
+  See https://github.com/mimetic-themes/pusha for the full config surface.
+
+  CSS below is the default fade transition. To replace it:
+    - Override .pusha-fade-* keyframes or the [data-page-container] rule in your
+      own stylesheet (loaded after this snippet).
+    - Or set window.theme.config.transitions = false above to disable Pusha's
+      transition handling entirely (instant swaps).
+    - For JS-driven animations (anime.js, GSAP), register a transition with
+      registerTransition({ name, leave, enter }) — see the Pusha README.
+{%- endcomment -%}
+
+<script>
+  window.theme = window.theme || {};
+  window.theme.config = window.theme.config || {
+    pjax: true,
+    analytics: true,  /* or { shopify, ga4, dataLayer } — see README "Analytics & tracking" */
+    transitions: true,
+    debug: false,
+    containerSelector: '#MainContent',
+    prefetchConfig: {
+      page:       { soft:  60000, hard: 300000 },
+      article:    { soft:  60000, hard: 300000 },
+      blog:       { soft:  60000, hard: 300000 },
+      collection: { soft:  30000, hard: 300000 },
+      product:    { soft:  30000, hard: 300000 },
+      index:      { soft:  30000, hard: 120000 }
+    }
+  };
+</script>
+
+<style>
+  /* Default fade — runtime adds .is-transitioning-out / .is-transitioning-in on
+     <html> around the swap. CSS transition (not animation) so the freshly-
+     inserted new container picks up the active is-transitioning-out opacity:0
+     state immediately — no flash, no re-run of the fade-out from opacity:1.
+     The runtime's transition-await helper accepts transitionend OR animationend,
+     so either works; transition is correct here. */
+  [data-page-container] {
+    transition: opacity 180ms ease-in-out;
+  }
+
+  html.is-transitioning-out [data-page-container] {
+    opacity: 0;
+  }
+  html.is-transitioning-in [data-page-container] {
+    opacity: 1;
+  }
+
+  /* Suppress the native cross-document View Transitions API on PJAX navs.
+     Newer Shopify reference themes (Horizon and derivatives) ship
+     @view-transition { navigation: auto } in their own CSS; with Pusha
+     intercepting clicks via PJAX no cross-doc nav fires, but pinning this
+     prevents competing transition layers on back/forward and edge cases. */
+  @view-transition { navigation: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-page-container] {
+      transition: none;
+    }
+  }
+</style>
+
+<script src="{{ 'pusha.min.js' | asset_url }}" defer></script>

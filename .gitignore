@@ -1,0 +1,30 @@
+node_modules
+dist
+
+# build artifacts
+*.tsbuildinfo
+*.tgz
+
+# logs
+*.log
+npm-debug.log*
+
+# tests / coverage
+coverage
+.nyc_output
+.playwright-mcp
+
+# env
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.development
+.env.test
+.env.production
+
+# editors / OS
+.DS_Store
+.idea
+.vscode

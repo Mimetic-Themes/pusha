@@ -1,0 +1,12 @@
+<div data-section-type="main-search" data-section-id="{{ section.id }}">
+  <h1>{{ 'general.search.title' | t }}</h1>
+</div>
+
+{%- comment -%}
+  Two defects in one marker: no type="application/json" (the browser parses the
+  body as JavaScript), and an event name that isn't a known standard event.
+  Nothing here declares search_submitted, so the search page is uncovered too.
+{%- endcomment -%}
+<script data-pusha-analytics-event>
+  { "name": "wishlist_added", "data": { "productVariant": { "id": "1" } } }
+</script>

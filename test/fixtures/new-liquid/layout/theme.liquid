@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="{{ request.locale.iso_code }}">
+<head>
+  {% doc %}
+    Example usage (new-Liquid doc block — must be ignored by the audit):
+    <script src="{{ 'ignored.js' | asset_url }}"></script>
+  {% enddoc %}
+  <title>{{ page_title }}</title>
+</head>
+<body>
+  <main id="main-content" data-template="{{ request.page_type }}"
+        data-page-container data-page-type="{{ request.page_type }}">
+    {{ content_for_layout }}
+  </main>
+  {% render 'drawer' %}
+  <div class="cart-badge" data-partials="cart-count">{{ cart.item_count }}</div>
+  <script type="module" src="{{ 's-view-event.js' | asset_url }}"></script>
+</body>
+</html>

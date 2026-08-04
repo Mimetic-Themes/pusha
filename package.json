@@ -1,0 +1,89 @@
+{
+  "name": "@mimetic/pusha",
+  "version": "0.1.0",
+  "description": "Instant page transitions for Shopify Online Store 2.0 themes.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "author": "Mimetic Themes, LLC",
+  "homepage": "https://github.com/mimetic-themes/pusha",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mimetic-themes/pusha.git"
+  },
+  "keywords": [
+    "shopify",
+    "shopify-theme",
+    "online-store-2.0",
+    "pjax",
+    "page-transitions"
+  ],
+  "files": [
+    "dist",
+    "snippets",
+    "bin",
+    "skill"
+  ],
+  "module": "./dist/pusha.esm.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/pusha.esm.js"
+    },
+    "./registry": {
+      "types": "./dist/registry.d.ts",
+      "import": "./dist/registry.js"
+    },
+    "./hooks": {
+      "types": "./dist/hooks.d.ts",
+      "import": "./dist/hooks.js"
+    },
+    "./transitions": {
+      "types": "./dist/transitions.d.ts",
+      "import": "./dist/transitions.js"
+    },
+    "./prefetch": {
+      "types": "./dist/prefetch.d.ts",
+      "import": "./dist/prefetch.js"
+    },
+    "./islands": {
+      "types": "./dist/islands.d.ts",
+      "import": "./dist/islands.js"
+    },
+    "./active-links": {
+      "types": "./dist/active-links.d.ts",
+      "import": "./dist/active-links.js"
+    },
+    "./diagnostics": {
+      "types": "./dist/diagnostics.d.ts",
+      "import": "./dist/diagnostics.js"
+    },
+    "./snippets/pusha.liquid": "./snippets/pusha.liquid"
+  },
+  "bin": {
+    "pusha": "./bin/pusha.js"
+  },
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24.0.0"
+  },
+  "scripts": {
+    "prepare": "npm run build",
+    "build": "vite build && vite build --mode umd && tsc -p tsconfig.build.json",
+    "build:types": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "watch": "vite build --watch"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^25.7.0",
+    "jsdom": "^29.1.1",
+    "tsx": "^4.21.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.1"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1"
+  }
+}

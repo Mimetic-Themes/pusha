@@ -1,0 +1,6 @@
+{% doc %}
+  Renders a promo banner.
+  @example {% content_for 'block', type: 'banner' %}
+{% enddoc %}
+<div class="banner">{{ block.settings.text }}</div>
+<script type="module" src="{{ 's-banner.js' | asset_url }}"></script>

@@ -1,0 +1,7 @@
+{
+  "sections": {
+    "hero": { "type": "hero" },
+    "featured": { "type": "featured" }
+  },
+  "order": ["hero", "featured"]
+}

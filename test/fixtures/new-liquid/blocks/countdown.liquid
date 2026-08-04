@@ -1,0 +1,5 @@
+<div class="countdown" data-deadline="{{ block.settings.deadline }}"></div>
+<script>
+  var el = document.currentScript.previousElementSibling;
+  setInterval(function () { el.textContent = String(el.dataset.deadline); }, 1000);
+</script>

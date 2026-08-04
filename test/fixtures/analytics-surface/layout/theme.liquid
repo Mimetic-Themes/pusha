@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <script>
+      gtag('event', 'page_view', { page_path: window.location.pathname });
+    </script>
+  </head>
+  <body data-template="{{ template }}">
+    {% sections 'header-group' %}
+
+    {%- comment -%}
+      Wrong place: the runtime queries the whole document, so a marker in the
+      persistent shell survives every swap and republishes this payload forever.
+    {%- endcomment -%}
+    <script type="application/json" data-pusha-analytics-event>
+      { "name": "cart_viewed", "data": { "cart": { "totalQuantity": 1 } } }
+    </script>
+
+    <main id="MainContent" data-page-container data-page-type="{{ template }}">
+      {{ content_for_layout }}
+    </main>
+  </body>
+</html>

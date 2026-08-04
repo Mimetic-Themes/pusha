@@ -1,0 +1,33 @@
+--- main-addresses.original.liquid	2026-05-12 13:46:08.670688449 -0400
++++ main-addresses.modified.liquid	2026-05-12 13:46:38.151603128 -0400
+@@ -17,7 +17,7 @@
+ {%- endstyle -%}
+ 
+ {%- paginate customer.addresses by 5 -%}
+-  <div class="customer addresses section-{{ section.id }}-padding" data-customer-addresses>
++  <div class="customer addresses section-{{ section.id }}-padding" data-section-type="main-addresses" data-section-id="{{ section.id }}" data-customer-addresses>
+     <h1>{{ 'customer.addresses.title' | t }}</h1>
+     <a href="{{ routes.account_url }}">
+       {{ 'customer.account.return' | t }}
+@@ -382,11 +382,16 @@
+   </div>
+ {%- endpaginate -%}
+ 
+-<script>
+-  window.addEventListener('load', () => {
+-    typeof CustomerAddresses !== 'undefined' && new CustomerAddresses();
+-  });
+-</script>
++{% javascript %}
++  window.theme = window.theme || {};
++  window.theme.sectionInits = window.theme.sectionInits || {};
++  window.theme.sectionInits['main-addresses'] = function(root) {
++    if (root.dataset.initialized === 'true') return;
++    if (typeof CustomerAddresses === 'undefined') return;
++    root.dataset.initialized = 'true';
++    new CustomerAddresses();
++  };
++{% endjavascript %}
+ 
+ {% schema %}
+ {

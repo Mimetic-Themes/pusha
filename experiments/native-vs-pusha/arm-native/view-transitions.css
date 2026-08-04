@@ -1,0 +1,23 @@
+/* Arm A — enable native cross-document View Transitions for full-page navs.
+   This is the one line that turns a plain MPA into a smooth-animated MPA. */
+@view-transition {
+  navigation: auto;
+}
+
+/* Default cross-fade for the whole page. Shopify reference themes tune this
+   per-region; for the experiment a global fade is the fair baseline to compare
+   against Pusha's default fade. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 180ms;
+  animation-timing-function: ease-in-out;
+}
+
+/* Respect reduced motion — parity with Pusha, which skips transitions here. */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

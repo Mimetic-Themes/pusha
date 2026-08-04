@@ -1,0 +1,14 @@
+<div data-section-type="main-collection" data-section-id="{{ section.id }}">
+  <h1>{{ collection.title }}</h1>
+</div>
+
+{%- comment -%} Shape drift: standard collection_viewed requires data.collection. {%- endcomment -%}
+<script type="application/json" data-pusha-analytics-event>
+  {
+    "name": "collection_viewed",
+    "data": {
+      "collectionTitle": "{{ collection.title }}",
+      "collectionId": "{{ collection.id }}"
+    }
+  }
+</script>

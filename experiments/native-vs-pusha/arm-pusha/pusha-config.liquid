@@ -1,0 +1,28 @@
+{%- comment -%}
+  Arm B — base-theme-next-specific Pusha config. Render this BEFORE
+  {% render 'pusha' %} so it wins the `window.theme.config || {}` fallback in
+  pusha.liquid.
+
+  Only the deltas from pusha.liquid's defaults are set here:
+   - containerSelector: this theme uses #main-content (not #MainContent).
+   - debug: on for the experiment so [pusha/*] console output is visible while
+     measuring; turn off for any perf capture (it adds console work).
+{%- endcomment -%}
+<script>
+  window.theme = window.theme || {};
+  window.theme.config = {
+    pjax: true,
+    analytics: true,
+    transitions: true,
+    debug: true,
+    containerSelector: '#main-content',
+    prefetchConfig: {
+      page:       { soft: 60000, hard: 300000 },
+      article:    { soft: 60000, hard: 300000 },
+      blog:       { soft: 60000, hard: 300000 },
+      collection: { soft: 30000, hard: 300000 },
+      product:    { soft: 30000, hard: 300000 },
+      index:      { soft: 30000, hard: 120000 }
+    }
+  };
+</script>

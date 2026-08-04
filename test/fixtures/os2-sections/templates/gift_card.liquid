@@ -1,0 +1,7 @@
+<div class="gift-card">{{ gift_card.qr_identifier }}</div>
+<script src="{{ 'qr.js' | asset_url }}"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    renderQr();
+  });
+</script>

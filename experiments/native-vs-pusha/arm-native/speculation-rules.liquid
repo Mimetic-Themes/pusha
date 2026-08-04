@@ -1,0 +1,31 @@
+{%- comment -%}
+  Arm A — Speculation Rules. Prerenders same-origin links on moderate hover
+  intent so navigation feels instant on Chromium (no effect on Safari/Firefox,
+  which don't implement the API — that gap is the point of the experiment).
+
+  Shopify-managed and stateful routes are excluded: prerendering /cart,
+  /checkout, /account, or the localization form would fire their side effects
+  early or prerender authenticated/stateful pages. "moderate" = prerender on
+  ~200ms hover / pointerdown, which is the sweet spot vs. "eager" (prerender
+  everything, wasteful) and "conservative" (only on pointerdown).
+{%- endcomment -%}
+<script type="speculationrules">
+{
+  "prerender": [
+    {
+      "where": {
+        "and": [
+          { "href_matches": "/*" },
+          { "not": { "href_matches": "/cart*" } },
+          { "not": { "href_matches": "/checkout*" } },
+          { "not": { "href_matches": "/checkouts/*" } },
+          { "not": { "href_matches": "/account*" } },
+          { "not": { "selector_matches": "[data-no-prerender]" } },
+          { "not": { "selector_matches": "form a" } }
+        ]
+      },
+      "eagerness": "moderate"
+    }
+  ]
+}
+</script>

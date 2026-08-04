@@ -1,0 +1,23 @@
+<div data-section-type="main-product" data-section-id="{{ section.id }}">
+  <h1>{{ product.title }}</h1>
+</div>
+
+{%- comment -%} The good case: correct type, correct shape, inside the container. {%- endcomment -%}
+<script type="application/json" data-pusha-analytics-event>
+  {
+    "name": "product_viewed",
+    "data": {
+      "productVariant": {
+        "id": "{{ product.selected_or_first_available_variant.id }}",
+        "price": {
+          "amount": {{ product.selected_or_first_available_variant.price | divided_by: 100.0 }},
+          "currencyCode": "{{ cart.currency.iso_code }}"
+        },
+        "product": {
+          "id": "{{ product.id }}",
+          "title": {{ product.title | json }}
+        }
+      }
+    }
+  }
+</script>

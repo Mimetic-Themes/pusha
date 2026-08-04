@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="{{ request.locale.iso_code }}">
+<head>
+  {% comment %}
+    Example only — this commented-out tag must NOT be flagged (bucket A):
+    <script src="{{ 'should-be-ignored.js' | asset_url }}" defer></script>
+  {% endcomment %}
+  <title>{{ page_title }}</title>
+</head>
+<body data-template="{{ template }}">
+  <details class="mobile-nav">
+    <summary>Menu</summary>
+    <nav>{{ linklists.main.links | default: '' }}</nav>
+  </details>
+  <main id="MainContent" data-page-container data-page-type="{{ template }}">
+    {{ content_for_layout }}
+  </main>
+  <script src="{{ 'legacy.js' | asset_url }}" defer></script>
+</body>
+</html>

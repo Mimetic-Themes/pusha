@@ -1,0 +1,15 @@
+<main>
+  <script>
+    fbq('track', 'PageView');
+  </script>
+
+  {%- comment -%} Pusha publishes page_viewed itself on every swap. {%- endcomment -%}
+  <script type="application/json" data-pusha-analytics-event>
+    { "name": "page_viewed", "data": { "url": "{{ canonical_url }}" } }
+  </script>
+
+  {%- comment -%} Computed name — honestly unverifiable at audit time. {%- endcomment -%}
+  <script type="application/json" data-pusha-analytics-event>
+    { "name": "{{ section.settings.event_name }}", "data": { "custom": true } }
+  </script>
+</main>
