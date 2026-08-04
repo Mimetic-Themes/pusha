@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: CI only reads the repo. Set explicitly so the scope stays
+# narrow if the repo/org default ever changes.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: test (node ${{ matrix.node }})
