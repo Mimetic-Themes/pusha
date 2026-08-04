@@ -43,7 +43,35 @@ state destroyed.
 - On new-Liquid: `Shopify.analytics.publish` **present**; `Shopify.analytics.page` and `.subscribe` **absent**.
 - Pusha's bridge **calls** `publish('page_viewed')` exactly 1× per nav — no self-double-fire. ⚠ This measured our own call sites, not receipt. It is now known that the call is **rejected**: the storefront publish API is [custom events only](https://shopify.dev/docs/api/web-pixels-api/emitting-data), so nothing downstream receives it. The double-count question below is therefore moot for this channel — the real finding is that the channel is empty.
 - Pusha's `analytics.page()` call is a **no-op** here (method absent) — the classic admin-pageview channel doesn't exist on new-Liquid; Pusha's optional-chaining safely skips it.
-- ⚠ **Open**: the theme's `<s-view-event view-event-trigger="connect">` re-fires a typed `PageViewEvent` through `@shopify/standard-events` (a *separate* channel) when it re-mounts on a product swap. Whether that + Pusha's `publish('page_viewed')` **double-count downstream** needs the Web Pixels sandbox / Shopify admin real-time to confirm. Recommended fix if so: on new-Liquid, Pusha's bridge defers to the theme's standard-events (PJAX-safe by construction) instead of also publishing.
+- ✅ **RESOLVED 2026-08-04** — the double-count worry was the wrong question. Neither channel reaches the sandbox at all, so there is nothing to double-count. See Move 5.
+
+## Move 5 — does the standard-events channel reach Web Pixels? (2026-08-04)
+
+Full procedure and evidence: `standard-events-probe.md`.
+
+**No.** `@shopify/standard-events` is dispatch-only and is not bridged into Web
+Pixels. Measured on a published theme with a custom pixel subscribed to
+`all_events`:
+
+- Hard load (control): `page_viewed` + `product_viewed` both arrive.
+- 7 soft navigations: **0** `page_viewed`, **0** `product_viewed`.
+- Stage A confirmed Pusha dispatched `shopify:page:view` (= `PageViewEvent`)
+  exactly once on each of those 7 swaps.
+- `clicked` events arrived in the sandbox throughout the walk — the pixel was
+  live and receiving the entire time, so this is a routing gap, not a dead
+  subscription.
+
+Two consequences beyond Pusha:
+
+1. `product_viewed` failing too means the theme's own
+   `<s-view-event view-event-trigger="connect">` elements don't reach pixels on
+   a swap either. Shopify's own new-Liquid instrumentation has the same gap.
+2. Steady `clicked` traffic proves WPM's document-level listeners survive the
+   swap. The infrastructure is alive; what's missing is a route from
+   standard-events plus a page-view trigger that isn't once-per-document.
+
+**No theme-side fix exists.** This is the platform ask, and it is narrower than
+"fix pixels on soft nav": the listener is already there.
 
 ## Verdict (updates the pre-experiment lean)
 

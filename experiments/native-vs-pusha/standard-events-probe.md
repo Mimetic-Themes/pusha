@@ -1,7 +1,46 @@
 # Standard-events probe — does the PageViewEvent bridge reach Web Pixels?
 
-**Status:** written 2026-08-04. **Stage A run and PASSED 2026-08-04.** Stage B
-pending.
+**Status:** ANSWERED 2026-08-04. Stage A passed, Stage B returned a clean
+negative. Arm 2 was not needed — there was nothing to disambiguate.
+
+## Answer
+
+**`@shopify/standard-events` is dispatch-only. It is not bridged into Web
+Pixels.** Re-dispatching `PageViewEvent` on a soft navigation does not reach the
+pixel sandbox, so no theme-side code can close the analytics gap on new-Liquid.
+
+Evidence, on `new-liquid-rislfwnm.myshopify.com`, arm 1, published theme, custom
+pixel subscribed to `all_events`:
+
+| Observation | Result |
+|---|---|
+| Hard load (control) | `page_viewed` + `product_viewed` both arrive |
+| Soft navigations walked | 7 |
+| `page_viewed` in sandbox across those 7 | **0** |
+| `product_viewed` in sandbox across those 7 | **0** |
+| `clicked` in sandbox during the same walk | arriving throughout |
+| `shopify:page:view` dispatched per swap (Stage A) | 1, every time |
+
+The `clicked` events are what make this conclusive. The sandbox was live,
+connected, and receiving for the entire walk — this is not a detached pixel or a
+dead subscription. The receiver worked; the page-view events never came.
+
+### Two further findings
+
+**Shopify's own instrumentation has the same gap.** `product_viewed` also never
+arrived. Pusha deliberately does not re-fire page-type events — those come from
+the theme's `<s-view-event view-event-trigger="connect">` elements re-mounting
+in swapped content. So the platform's own new-Liquid view-event components don't
+reach pixels on a soft navigation either. This is not a Pusha-shaped problem.
+
+**WPM's document-level listeners survive the swap.** The steady `clicked`
+traffic proves Web Pixels Manager is alive and listening on the page after a
+soft nav. It has not torn down. What's missing is narrow and specific: no route
+from the standard-events channel into the sandbox, and a page-view trigger that
+is once-per-document.
+
+That makes the platform ask much smaller than "fix pixels on soft navigation":
+*the listener is already there — give it a soft-nav route.*
 
 ## Stage A result — the bridge executes (2026-08-04)
 
