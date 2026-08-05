@@ -17,8 +17,11 @@
 // (Meta, GA4, TikTok, Klaviyo) stay dark after the first page. The calls are
 // kept because they are harmless no-ops and the lifecycle around them is
 // correct, but they are NOT a working pixel path. The documented route is a
-// namespaced custom event + a merchant-authored custom pixel — not built yet.
-// See README "Analytics & tracking".
+// namespaced custom event + a merchant-authored custom pixel — that's the
+// `customEvents` bridge below (on by default). ⚠ It reaches pixels, but it does
+// NOT restore third-party app pixels (Meta/Klaviyo don't know the prefixed
+// names) and cannot feed Shopify admin reporting. Unverified on a live sandbox.
+// See docs/analytics-companion-pixel.md and README "Analytics & tracking".
 //
 // FOUR bridges, each switchable via the `analytics` config:
 //
@@ -58,6 +61,7 @@
 // throws or blocks navigation.
 
 import { getConfig } from './config.js';
+import { log as dlog } from './diagnostics.js';
 import type { AnalyticsConfig, NavMeta } from './types.js';
 
 interface SerializedEvent {
@@ -77,19 +81,43 @@ function pageParams(): Record<string, string> {
 // switches. Defaults: shopify on, ga4/dataLayer off.
 function resolveBridges(): Required<AnalyticsConfig> {
   const a = getConfig().analytics;
-  if (a === false) return { shopify: false, ga4: false, dataLayer: false, standardEvents: false };
-  if (a === undefined || a === true) return { shopify: true, ga4: false, dataLayer: false, standardEvents: 'auto' };
+  if (a === false) {
+    return {
+      shopify: false, ga4: false, dataLayer: false,
+      standardEvents: false, customEvents: false, trekkie: false,
+    };
+  }
+  if (a === undefined || a === true) {
+    return {
+      shopify: true, ga4: false, dataLayer: false,
+      standardEvents: 'auto', customEvents: true, trekkie: false,
+    };
+  }
   return {
     shopify: a.shopify !== false,
     ga4: a.ga4 ?? false,
     dataLayer: a.dataLayer ?? false,
     standardEvents: a.standardEvents ?? 'auto',
+    customEvents: a.customEvents ?? true,
+    trekkie: a.trekkie ?? false,
   };
 }
 
 export function firePageView(meta?: NavMeta): void {
   const bridges = resolveBridges();
-  if (bridges.shopify) fireShopify(meta);
+  // Parsed once and shared: both Shopify bridges read the same serialized
+  // blocks, and re-parsing would double every malformed-JSON warning.
+  const serialized =
+    bridges.customEvents !== false || bridges.shopify ? readSerializedEvents() : [];
+  if (bridges.customEvents !== false) {
+    fireCustomEvents(
+      bridges.customEvents === true ? 'pusha' : bridges.customEvents,
+      serialized,
+      meta,
+    );
+  }
+  if (bridges.trekkie) fireTrekkie(meta);
+  if (bridges.shopify) fireShopify(serialized, meta);
   if (bridges.ga4 !== false) fireGa4(bridges.ga4);
   if (bridges.dataLayer !== false) fireDataLayer(bridges.dataLayer);
   // Async, fire-and-forget: dynamic import + dispatch shouldn't block the nav
@@ -97,7 +125,7 @@ export function firePageView(meta?: NavMeta): void {
   if (bridges.standardEvents !== false) void fireStandardEvents(meta);
 }
 
-function fireShopify(meta?: NavMeta): void {
+function fireShopify(serialized: SerializedEvent[], meta?: NavMeta): void {
   const analytics = window.Shopify?.analytics;
   if (!analytics) return;
 
@@ -118,7 +146,7 @@ function fireShopify(meta?: NavMeta): void {
   }
 
   // Page-type events the theme serialized for the page just swapped in.
-  for (const evt of readSerializedEvents()) {
+  for (const evt of serialized) {
     try {
       analytics.publish?.(evt.name, evt.data);
     } catch (err) {
@@ -152,6 +180,133 @@ function readSerializedEvents(): SerializedEvent[] {
     }
   }
   return out;
+}
+
+// ─── Trekkie bridge (admin reporting) ───────────────────────────────────────
+// Re-fires the pageview that feeds Shopify admin's Analytics reports. Separate
+// pipe from web pixels: Trekkie/Monorail carries admin reporting, Web Pixels
+// Manager carries Meta/GA4/Klaviyo. This bridge only addresses the former.
+//
+// MEASURED on a published OS 2.0 store (see experiments/monorail-admin-probe.md):
+//   - `lib.page(null, { path, url })` with no identity sends, but the payload
+//     carries NO pageType and NO resourceId at all.
+//   - `lib.page(null, { …, pageType, resourceId })` lands both fields in
+//     `trekkie_storefront_page_view` and both `storefront_customer_tracking`
+//     schemas, AND Web Pixels Manager mirrors it into
+//     `storefront_customer_tracking_parity` with the same event_id.
+//   - `ShopifyAnalytics.meta` is NOT read for identity and is never written —
+//     verified unchanged across calls. That matters: `meta` is a global other
+//     scripts read, so mutating it would be a side effect on code we don't own.
+//
+// Identity comes from the theme, per template, exactly like the page-type
+// Customer Events above — Pusha never invents it. No block, no call.
+//
+// ⚠ `window.ShopifyAnalytics` is undocumented and sits outside Shopify's Liquid
+// compatibility guarantee. Every access is optional-chained so its removal
+// degrades to silence: admin undercounts rather than receiving wrong data.
+//
+// ⚠ Known payload gaps on a soft nav, unresolved: `canonical_url` comes from the
+// document's <link rel="canonical"> (head-sync should correct it — untested),
+// `navigation_type` stays "reload" from the original load's Navigation Timing
+// entry, and `microSessionId` does not rotate the way a hard load rotates it.
+interface TrekkiePage {
+  pageType?: string;
+  resourceId?: number | string;
+  [key: string]: unknown;
+}
+
+function readTrekkiePage(): TrekkiePage | null {
+  const node = document.querySelector<HTMLScriptElement>('script[data-pusha-trekkie-page]');
+  const raw = node?.textContent?.trim();
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as TrekkiePage;
+    }
+  } catch (err) {
+    console.warn('[pusha/analytics] bad data-pusha-trekkie-page JSON', err);
+  }
+  return null;
+}
+
+function fireTrekkie(meta?: NavMeta): void {
+  const lib = window.ShopifyAnalytics?.lib;
+  const page = lib?.page;
+  if (!lib || typeof page !== 'function') return;
+
+  const identity = readTrekkiePage();
+  if (!identity) {
+    dlog('analytics', 'trekkie bridge: no data-pusha-trekkie-page block, skipping');
+    return;
+  }
+
+  const url = new URL(meta?.url ?? window.location.href, window.location.origin);
+
+  try {
+    page.call(lib, null, {
+      path: url.pathname,
+      search: url.search,
+      url: url.href,
+      title: document.title,
+      ...identity,
+    });
+    dlog('analytics', `trekkie page() fired for ${identity.pageType ?? '?'} ${url.pathname}`);
+  } catch (err) {
+    console.warn('[pusha/analytics] ShopifyAnalytics.lib.page threw', err);
+  }
+}
+
+// ─── Custom-event bridge ────────────────────────────────────────────────────
+// The only publish path from a theme that actually reaches web pixels.
+// `Shopify.analytics.publish` rejects STANDARD event names ("to ensure the
+// quality of standard events, partners and merchants cannot publish standard
+// events" — web-pixels-api/emitting-data) and returns false, so the page_viewed
+// call in fireShopify() above lands nowhere. CUSTOM events are explicitly
+// supported from theme Liquid and are delivered to "all custom pixels and app
+// pixels", so a prefixed name gets through.
+//
+// Nothing subscribes to these by default — they are a no-op until the merchant
+// adds a companion pixel that forwards them onward. See
+// docs/analytics-companion-pixel.md for the pixel and the honest limits (this
+// does NOT revive third-party app pixels, and cannot feed admin reporting).
+//
+// Only fires on swaps: firePageView() is called from the swap path alone, so a
+// hard load emits Shopify's native standard events and nothing from here. The
+// two sets are disjoint — a companion pixel can subscribe to both without
+// double-counting.
+function fireCustomEvents(
+  prefix: string,
+  serialized: SerializedEvent[],
+  meta?: NavMeta,
+): void {
+  if (!window.Shopify?.analytics?.publish) return;
+
+  const url = meta?.url
+    ? new URL(meta.url, window.location.origin).href
+    : window.location.href;
+
+  publishCustom(prefix, 'page_viewed', {
+    url,
+    path: new URL(url).pathname,
+    title: document.title,
+    template: containerTemplate(meta),
+    cached: meta?.cached ?? false,
+  });
+
+  // Same theme-serialized payloads the Shopify bridge reads, republished under
+  // the prefix so they clear the standard-name fence.
+  for (const evt of serialized) {
+    publishCustom(prefix, evt.name, evt.data);
+  }
+}
+
+function publishCustom(prefix: string, name: string, data: unknown): void {
+  try {
+    window.Shopify?.analytics?.publish?.(`${prefix}:${name}`, data);
+  } catch (err) {
+    console.warn(`[pusha/analytics] publish(${prefix}:${name}) threw`, err);
+  }
 }
 
 // ─── Standard Events bridge (new-Liquid) ────────────────────────────────────

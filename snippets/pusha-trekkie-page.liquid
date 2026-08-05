@@ -1,0 +1,40 @@
+{% doc %}
+  Page identity for Pusha's Trekkie bridge (`analytics: { trekkie: true }`).
+
+  Renders the destination page's `pageType` and `resourceId` so Pusha can re-fire
+  Shopify's own pageview after a soft navigation. Without this block the bridge
+  no-ops — Pusha never invents analytics identity.
+
+  Render it INSIDE the PJAX container (alongside your main section), not in
+  theme.liquid: it has to arrive with the swapped-in content so it describes the
+  page just navigated to.
+
+  This feeds Shopify admin's Analytics reports only. It does NOT reach web pixels
+  (Meta, GA4, Klaviyo) — see docs/analytics-companion-pixel.md for those.
+
+  Usage:
+    {% render 'pusha-trekkie-page' %}
+{% enddoc %}
+
+{%- liquid
+  assign pusha_resource_id = nil
+  case request.page_type
+    when 'product'
+      assign pusha_resource_id = product.id
+    when 'collection'
+      assign pusha_resource_id = collection.id
+    when 'article'
+      assign pusha_resource_id = article.id
+    when 'blog'
+      assign pusha_resource_id = blog.id
+    when 'page'
+      assign pusha_resource_id = page.id
+  endcase
+-%}
+
+<script type="application/json" data-pusha-trekkie-page>
+  {
+    "pageType": {{ request.page_type | json }}{% if pusha_resource_id %},
+    "resourceId": {{ pusha_resource_id | json }}{% endif %}
+  }
+</script>

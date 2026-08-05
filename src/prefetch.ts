@@ -12,8 +12,22 @@ interface CacheEntry {
   cachedAt: number;
 }
 
+// Whole pages are cached as HTML strings, so an uncapped map is a slow leak on
+// a long browsing session — and viewport prefetch can add entries far faster
+// than clicking does. Oldest-first eviction; Map preserves insertion order.
+const CACHE_MAX_ENTRIES = 32;
+
 const cache = new Map<string, CacheEntry>();
 const inFlight = new Map<string, Promise<void>>();
+
+function trimCache(): void {
+  while (cache.size > CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (typeof oldest !== 'string') break;
+    cache.delete(oldest);
+    dlog('prefetch', `evicted ${oldest} (cache cap ${CACHE_MAX_ENTRIES})`);
+  }
+}
 
 let hoverTimeout: ReturnType<typeof setTimeout> | null = null;
 let installed = false;
@@ -26,11 +40,33 @@ function isSameOrigin(url: string): boolean {
   }
 }
 
-// Cache key — pathname + search. Hash is excluded because it never changes
-// server-rendered content.
+// Params that never change server-rendered content — campaign tags and
+// Shopify's own recommendation-tracking (`pr_*`, added to every product link
+// rendered by a recommendations section). Stripping them collapses what would
+// otherwise be a separate cache entry, and a separate fetch, per referring
+// widget. Deny-list rather than allow-list on purpose: an unknown param may be
+// a collection filter or a variant, and dropping one of those would serve the
+// wrong page.
+const TRACKING_PARAMS = new Set([
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'utm_id',
+  'gclid', 'gbraid', 'wbraid', 'fbclid', 'msclkid', 'ttclid', 'twclid', 'igshid',
+  'mc_cid', 'mc_eid', 'srsltid', '_kx',
+  'pr_prod_strat', 'pr_rec_id', 'pr_rec_pid', 'pr_ref_pid', 'pr_seq',
+]);
+
+// Cache key — pathname + normalized search. Hash is excluded because it never
+// changes server-rendered content. Params are stripped of tracking noise and
+// sorted so equivalent URLs share one entry. This value is also used as the
+// fetch URL, so the request goes out clean too.
 export function toPathKey(url: string): string {
   const u = new URL(url, window.location.href);
-  return u.pathname + u.search;
+  const params = new URLSearchParams(u.search);
+  for (const name of Array.from(params.keys())) {
+    if (TRACKING_PARAMS.has(name)) params.delete(name);
+  }
+  params.sort();
+  const search = params.toString();
+  return search ? `${u.pathname}?${search}` : u.pathname;
 }
 
 // Infer template type from Shopify's URL structure. Used to look up the TTL
@@ -143,6 +179,7 @@ export function prefetchPage(url: string, { force = false } = {}): Promise<void>
       }
       const html = await response.text();
       cache.set(key, { html, cachedAt: Date.now() });
+      trimCache();
       dlog('prefetch', `cached ${key} (${html.length} bytes)`);
       warmCriticalImages(html);
     } catch (err) {
@@ -189,11 +226,23 @@ function clearHoverTimeout(): void {
   }
 }
 
-// Touch path: skip the 100ms hover-intent debounce. The user has already
-// committed to the tap, so kick the fetch as soon as pointerdown fires —
-// gives mobile the ~80–200ms before click-settle to warm the cache.
-function handleLinkTouch(event: PointerEvent): void {
-  if (event.pointerType !== 'touch') return;
+// Pointer-down path, every pointer type: skip the 100ms hover-intent debounce.
+// The user has committed to the click, so kick the fetch immediately — mobile
+// gets the ~80–200ms before click-settle, and a fast mouse click that lands
+// inside the debounce window stops missing the cache entirely.
+function handleLinkPointerDown(event: PointerEvent): void {
+  const link = (event.target as Element | null)?.closest('a');
+  if (!link || !shouldPrefetchLink(link)) return;
+  const config = getConfig();
+  const ttl = resolveTtl(getTemplateFromUrl((link as HTMLAnchorElement).href), config);
+  if (!ttl) return;
+  clearHoverTimeout();
+  prefetchPage((link as HTMLAnchorElement).href);
+}
+
+// Keyboard path: tabbing onto a link is the keyboard equivalent of hovering it,
+// and without this keyboard users never get a warm cache.
+function handleLinkFocus(event: FocusEvent): void {
   const link = (event.target as Element | null)?.closest('a');
   if (!link || !shouldPrefetchLink(link)) return;
   const config = getConfig();
@@ -207,7 +256,65 @@ export function installPrefetch(): void {
   installed = true;
   document.addEventListener('mouseover', handleLinkHover);
   document.addEventListener('mouseout', clearHoverTimeout);
-  document.addEventListener('pointerdown', handleLinkTouch);
+  document.addEventListener('pointerdown', handleLinkPointerDown);
+  document.addEventListener('focusin', handleLinkFocus);
+}
+
+// Viewport warmup. Warms the first link inside each element matching
+// `prefetchInViewport` as it nears the viewport — the collection-grid case,
+// where the next click is almost always a card the buyer just scrolled to.
+//
+// Opt-in by selector because OS 2.0 themes share no card convention (Dawn uses
+// .card-wrapper, others differ, and Horizon has a <product-card> element). A
+// wrong selector either does nothing or warms far too much, so there is no
+// useful default. Budget it: on a 50-product collection this is 50 fetches if
+// the buyer scrolls to the bottom, bounded only by CACHE_MAX_ENTRIES.
+let viewportObserver: IntersectionObserver | null = null;
+
+function warmElementLink(el: Element): void {
+  const link = el.matches('a[href]') ? el : el.querySelector('a[href]');
+  if (!link || !shouldPrefetchLink(link)) return;
+  const ttl = resolveTtl(getTemplateFromUrl((link as HTMLAnchorElement).href), getConfig());
+  if (!ttl) return;
+  prefetchPage((link as HTMLAnchorElement).href);
+}
+
+export function observeViewportPrefetch(root: ParentNode = document): void {
+  const selector = getConfig().prefetchInViewport;
+  if (!selector) return;
+
+  if (typeof IntersectionObserver === 'undefined') {
+    root.querySelectorAll(selector).forEach(warmElementLink);
+    return;
+  }
+
+  viewportObserver ??= new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        viewportObserver?.unobserve(entry.target);
+        warmElementLink(entry.target);
+      }
+    },
+    { rootMargin: '200px 0px' },
+  );
+
+  const targets = root.querySelectorAll(selector);
+  targets.forEach((el) => viewportObserver?.observe(el));
+  if (targets.length) dlog('prefetch', `viewport warmup observing ${targets.length} × "${selector}"`);
+}
+
+// Clears the module-level singletons. Without this, `installed` stays true
+// across a test's fresh jsdom document and installPrefetch() early-returns,
+// leaving the listeners bound to the torn-down document.
+export function _resetPrefetchForTests(): void {
+  viewportObserver?.disconnect();
+  viewportObserver = null;
+  installed = false;
+  clearHoverTimeout();
+  cache.clear();
+  inFlight.clear();
+  warmedFrom.clear();
 }
 
 // Eager nav-link warmup. Runs at requestIdleCallback time on initial load

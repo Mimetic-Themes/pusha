@@ -9,7 +9,7 @@ A small drop-in runtime that intercepts internal links, swaps the main container
 - Hover/touch prefetch with stale-while-revalidate cache
 - Named transitions, component registry, lifecycle hooks
 - Section Rendering API revalidation for stale-prone regions ("islands")
-- Analytics bridge — re-fires page-view signals on every swap (see [Analytics & tracking](#analytics--tracking) for what it does and does not reach)
+- Analytics bridges — re-fire page-view signals on every swap (see [Analytics & tracking](#analytics--tracking) for what they do and do not reach)
 - Automatic focus restoration + screen-reader announcement on every swap
 - Theme editor co-exists — sections re-init on `shopify:section:load` / `:select`
 
@@ -24,6 +24,8 @@ We would not put this on a merchant store without measuring the trade-offs first
 A soft navigation is not a document load. Shopify's platform does a set of things exactly once per document — boots Web Pixels Manager, initializes app scripts, renders every Liquid value on the page against the current request — and a swap silently skips all of it. Pusha takes over some of that work and cannot take over the rest. What it cannot do is where merchant data breaks:
 
 - **Web pixels stop firing.** Anything wired through Customer Events — Meta, GA4, TikTok, Klaviyo, session replay — goes dark after the first page. This is measured, not assumed: across 7 soft navigations on a published new-Liquid store with a custom pixel subscribed to `all_events`, zero `page_viewed` and zero `product_viewed` arrived, while `clicked` events kept flowing the whole time. Both routes out of theme code are closed — `Shopify.analytics.publish` rejects standard event names by design, and re-dispatching `PageViewEvent` through `@shopify/standard-events` reaches nothing. Details in [Analytics & tracking](#analytics--tracking); full evidence in `experiments/native-vs-pusha/standard-events-probe.md`. If attribution matters on a route, don't PJAX that route.
+
+  Two partial mitigations exist. Prefixed **custom** events do reach pixels and can be forwarded to whichever vendors you wire up yourself ([companion pixel](docs/analytics-companion-pixel.md)) — but third-party app pixels won't understand them. And Shopify **admin** reporting is a separate pipe that's independently recoverable (`analytics: { trekkie: true }`). Neither restores installed marketing apps.
 - **Apps go stale or silent.** Pusha has not been built or tested against theme app extensions. App blocks inside the swapped region come back as inert HTML with dead JS; app embeds in the persistent shell survive but hold listeners pointing at replaced nodes; app-injected `<script>` tags initialize once and stay quiet after page one. There is no way to wrap code you don't own, so opt those pages out (`data-no-transition` on links into them, or `pjax: false` globally) until app support lands.
 - **The persistent shell freezes at first render.** Header, footer, and anything outside the container keep the Liquid output of whichever page the buyer landed on. Currency, customer state, localization, and cart context in those regions can drift from the current URL. Pusha syncs the head and the container; it does not re-render the shell. [Islands](#islands-section-rendering-api) exist for exactly this and will revalidate a marked region through the Section Rendering API — but you have to identify the stale-prone regions yourself, and anything you miss stays wrong silently.
 
@@ -126,6 +128,7 @@ Set `window.theme.config` before the runtime boots. The `pusha.liquid` snippet d
     analytics: true,                     // analytics bridge — see "Analytics & tracking" (object form for GA4/GTM)
     transitions: true,                   // run leave/enter CSS — set false for instant swaps
     containerSelector: '#MainContent',
+    prefetchInViewport: '',              // selector whose links warm as they scroll into view (off unless set)
     disabledComponents: [],              // skip these by name on every nav
     cartStatefulRoutes: [],              // routes whose cache to flush on cart:mutated
 
@@ -172,29 +175,89 @@ A PJAX swap is **not** a browser navigation, so nothing re-fires analytics on it
 > Worth knowing that this is not specific to Pusha, or to third-party runtimes at all. `product_viewed` is fired by the theme's own `<s-view-event view-event-trigger="connect">` elements when they re-mount, and it doesn't arrive either — Shopify's own new-Liquid instrumentation has the same gap on any soft navigation. Related discussion: [Shopify Developer Community](https://community.shopify.dev/t/a-liquid-partials-experiment/36515).
 >
 > **If your store depends on Customer Events pixels for attribution, do not run Pusha on those routes yet.** Opt them out (`data-no-transition`, or `pjax: false` globally) until this is resolved.
+>
+> **Two routes out of it exist, and neither is a full fix.** Prefixed *custom* events do reach pixels — that's the `customEvents` bridge below — but a companion pixel has to translate them, and third-party app pixels won't understand them. Separately, Shopify **admin** reporting turns out to be recoverable on its own: see the `trekkie` bridge. Admin and pixels are different pipes.
+
+### Admin analytics and web pixels are one emission, two destinations
+
+Measured on a published OS 2.0 store, a single hard-load pageview carries **the same `event_id`** across `trekkie_storefront_page_view`, both `storefront_customer_tracking` schemas, and `web_pixels_manager_event_publish`. They are not independent systems that happen to break together — they are one emission fanned out.
+
+That has a practical consequence, also measured: calling `ShopifyAnalytics.lib.page()` on a soft navigation produces the Monorail events **and** causes Web Pixels Manager to mirror them into `storefront_customer_tracking_parity` — while still not publishing the corresponding standard event to the pixel sandboxes. WPM observes the soft navigation and routes it to admin, but not onward to pixels.
+
+Full procedure and payloads: `experiments/monorail-admin-probe.md`.
 
 What the bridge does still cover is below. Every channel is best-effort: absent globals are silent no-ops, and nothing here throws or blocks navigation.
 
 > **Validate on a real, published store before trusting any of it.** GA4 DebugView and pixel configs only behave correctly against a published theme — a preview/dev environment won't tell you the truth. Check Shopify admin live view, GA4 Realtime/DebugView, and Meta Events Manager across a few PJAX navigations.
 
-Four independent bridges, switchable via the object form:
+Six independent bridges, switchable via the object form:
 
 ```js
 analytics: {
   shopify: true,            // Shopify.analytics.page() — classic themes (default true)
+  customEvents: true,       // prefixed custom events → companion pixel (default true)
+  trekkie: false,           // ShopifyAnalytics.lib.page() → admin reporting (default FALSE)
   standardEvents: 'auto',   // @shopify/standard-events PageViewEvent (new-Liquid; default 'auto')
   ga4: false,               // direct gtag.js page_view               (default false)
   dataLayer: false,         // GTM dataLayer push                     (default false)
 }
 ```
 
-`analytics: true` is shorthand for `{ shopify: true, standardEvents: 'auto', ga4: false, dataLayer: false }`; `analytics: false` disables everything.
+`analytics: true` is shorthand for `{ shopify: true, customEvents: true, trekkie: false, standardEvents: 'auto', ga4: false, dataLayer: false }`; `analytics: false` disables everything.
 
 ### 1. Shopify (`Shopify.analytics.page()`) — on by default
 
 Every swap calls `Shopify.analytics.page()`, the Trekkie/Monorail pageview that feeds Shopify admin reporting on classic themes. On new-Liquid themes this method is **absent** and the call safely no-ops (verified in `experiments/native-vs-pusha/results.md`), so the admin pageview channel is classic-only.
 
 The same bridge also calls `Shopify.analytics.publish('page_viewed', …)` and re-publishes any page-type payloads the theme serialized. **Both of those calls are rejected by the platform** — see the gap above. They remain in the code because the surrounding lifecycle is correct and the calls are harmless no-ops, but they are not a working pixel path and should not be counted on. Reaching pixels needs either a platform change or a merchant-authored custom pixel (see below).
+
+### 1a. Custom events (`customEvents`) — on by default
+
+The one publish path that does reach pixels. Standard event *names* are fenced, but [custom events are explicitly supported from theme Liquid](https://shopify.dev/docs/api/web-pixels-api/emitting-data) and are delivered to "all custom pixels and app pixels". So Pusha publishes `pusha:page_viewed` on every swap, plus a prefixed copy of each serialized page-type payload.
+
+```js
+analytics: { customEvents: true }        // default — `pusha:` prefix
+analytics: { customEvents: 'softnav' }   // your own namespace
+analytics: { customEvents: false }       // off
+```
+
+Nothing consumes these until you add a companion pixel that subscribes and forwards them — see **[docs/analytics-companion-pixel.md](docs/analytics-companion-pixel.md)** for the pixel, the Liquid, and the honest limits. It reaches the vendors you wire up yourself; it does **not** revive third-party app pixels, because Meta and Klaviyo have no mapping for a prefixed name.
+
+Only swaps emit these — `firePageView()` runs from the swap path alone — so they're disjoint from the native hard-load events and a companion pixel can subscribe to both without double-counting.
+
+### 1b. Trekkie (`trekkie`) — admin reporting, **off by default**
+
+Shopify admin's Analytics reports are fed by Trekkie/Monorail, a different pipe from web pixels. On a soft navigation it can be re-fired directly:
+
+```js
+analytics: { trekkie: true }
+```
+
+Measured on a published OS 2.0 store: `ShopifyAnalytics.lib.page(null, { path, url, pageType, resourceId })` lands `pageType` and `resourceId` in `trekkie_storefront_page_view` and both `storefront_customer_tracking` schemas, and WPM mirrors it into `storefront_customer_tracking_parity`. Called *without* those fields the event still sends but carries no `page_type` at all — identity rides the argument, so the serialized block is the whole mechanism.
+
+`ShopifyAnalytics.meta` is never read for identity and **never written**. It's a global other scripts read; mutating it would be a side effect on code you don't own.
+
+Identity comes from the theme, per template, rendered **inside** the swapped container:
+
+```liquid
+{% render 'pusha-trekkie-page' %}
+```
+
+Or by hand:
+
+```liquid
+<script type="application/json" data-pusha-trekkie-page>
+  { "pageType": {{ request.page_type | json }}, "resourceId": {{ product.id | json }} }
+</script>
+```
+
+No block → no call. Pusha never invents analytics identity.
+
+**Why it's off by default.** `window.ShopifyAnalytics` is undocumented and sits outside Shopify's Liquid compatibility guarantee — Liquid can stay stable while the JavaScript underneath is replaced. Every access is optional-chained, so if it disappears admin reporting silently *undercounts* rather than reporting wrong data. That's a deliberate trade: an honest gap beats confident garbage. Enable it knowingly.
+
+**Unverified, and it matters:** this proves the event is *sent* with correct fields. It does not prove Shopify admin *counts* it — that needs a controlled session comparison over a couple of days. Known payload gaps on a soft nav: `canonical_url` comes from the document's `<link rel="canonical">` (head-sync should correct it, untested), `navigation_type` stays `"reload"` from the original load's Navigation Timing entry, and `microSessionId` doesn't rotate the way a hard load rotates it.
+
+This bridge does **not** reach web pixels. Marketing tags still need the companion pixel above.
 
 The theme supplies page-type payloads as a JSON script inside the swapped container (`#MainContent`). No script → no event, so Pusha never fabricates data:
 
@@ -591,10 +654,10 @@ Source layout under `src/`:
 | `registry.ts` | Component registry singleton |
 | `hooks.ts` | Lifecycle hooks |
 | `transitions.ts` | Named-transition system |
-| `prefetch.ts` | Hover/touch prefetch + nav-link warmup + cache |
+| `prefetch.ts` | Hover/pointer/focus/viewport prefetch + nav-link warmup + cache |
 | `islands.ts` | Section Rendering API revalidation |
 | `head-sync.ts` | Title, meta tags, body data-template, scripts, stylesheets, eager image waiting |
-| `analytics.ts` | Shopify analytics bridge |
+| `analytics.ts` | Analytics bridges — custom events, Trekkie, standard-events, GA4, GTM |
 | `focus.ts` | A11y focus + aria-live |
 | `scroll.ts` | Manual scroll restoration |
 | `config.ts` | Resolved-config singleton |

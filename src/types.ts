@@ -48,6 +48,32 @@ export interface AnalyticsConfig {
    *  theme ships standard-events); `false` disables; `true` forces the attempt.
    *  Independent of `shopify` — the two channels don't cross-forward. */
   standardEvents?: boolean | 'auto';
+  /** Prefixed custom customer events — the only publish path that reaches web
+   *  pixels. Standard event names are fenced (`Shopify.analytics.publish`
+   *  returns false for them); custom events are explicitly supported from theme
+   *  Liquid and reach "all custom pixels and app pixels". `true` (default) uses
+   *  the `pusha` prefix; a string sets your own (use a shared one to let a
+   *  single companion pixel serve several soft-nav frameworks); `false`
+   *  disables. Nothing consumes these until you add a companion pixel —
+   *  see docs/analytics-companion-pixel.md. */
+  customEvents?: boolean | string;
+  /** Re-fire Shopify's own pageview into Trekkie/Monorail — the pipe behind the
+   *  admin's Analytics reports — by calling `ShopifyAnalytics.lib.page(null, …)`
+   *  with the destination's identity. MEASURED to work on a published OS 2.0
+   *  store: `pageType`/`resourceId` land in `trekkie_storefront_page_view` and
+   *  both `storefront_customer_tracking` schemas, and Web Pixels Manager mirrors
+   *  it into `storefront_customer_tracking_parity`. Identity is read from a
+   *  `<script data-pusha-trekkie-page>` block the theme renders per template —
+   *  `ShopifyAnalytics.meta` is never written to.
+   *
+   *  ⚠ OFF by default and deliberately so. `ShopifyAnalytics` is an undocumented
+   *  global outside Shopify's Liquid compatibility guarantee, so it can vanish
+   *  without notice. Every access is optional-chained: if it goes, admin
+   *  reporting silently undercounts rather than reporting wrong data.
+   *
+   *  ⚠ Does NOT reach web pixels. Meta/GA4/Klaviyo still need a companion pixel
+   *  — see docs/analytics-companion-pixel.md. */
+  trekkie?: boolean;
 }
 
 export interface PushaConfig {
@@ -67,6 +93,11 @@ export interface PushaConfig {
   analytics?: boolean | AnalyticsConfig;
   /** PJAX swap target. Defaults to '#MainContent'. */
   containerSelector?: string;
+  /** Selector for elements whose first link is warmed as they near the viewport
+   *  (collection cards, article tiles). Off unless set — OS 2.0 themes share no
+   *  card convention, so there's no safe default. ⚠ Budget it: a long collection
+   *  scroll warms one page per card, capped only by the prefetch cache size. */
+  prefetchInViewport?: string;
   /** Routes (paths) whose prefetch entries should be flushed on `cart:mutated`. */
   cartStatefulRoutes?: string[];
 }
@@ -115,6 +146,19 @@ declare global {
       currency?: { active: string; rate: string };
       locale?: string;
       formatMoney?: (cents: number, format: string) => string;
+    };
+    /** Trekkie — Shopify's own storefront analytics client, the pipe behind the
+     *  admin's Analytics reports. Undocumented and outside the Liquid
+     *  compatibility guarantee, so treat every member as possibly absent. */
+    ShopifyAnalytics?: {
+      lib?: {
+        page?: (name: string | null, props?: Record<string, unknown>) => unknown;
+        track?: (event: string, props?: Record<string, unknown>, ...rest: unknown[]) => unknown;
+      };
+      /** Page identity rendered by Liquid for the CURRENT document. Pusha reads
+       *  identity from the theme's serialized block instead, and never writes
+       *  here — other scripts on the page read this object. */
+      meta?: Record<string, unknown>;
     };
     /** GA4 / Google Ads global. Present when gtag.js is installed in the theme. */
     gtag?: (...args: unknown[]) => void;

@@ -36,6 +36,7 @@ import {
   getTemplateFromUrl,
   installPrefetch,
   invalidateCache,
+  observeViewportPrefetch,
   peekInFlight,
   warmupNavLinks,
 } from './prefetch.js';
@@ -210,6 +211,11 @@ async function navigate(url: string, options: { isPopState?: boolean; replace?: 
     window.location.href = href;
     return;
   }
+
+  // Tell assistive tech the region is mid-update, so a screen reader doesn't
+  // announce half-swapped content. Cleared in the `finally` below, which also
+  // covers the abort and hard-fallback paths.
+  currentContainer.setAttribute('aria-busy', 'true');
 
   const controller = new AbortController();
   currentNavigation = controller;
@@ -411,6 +417,9 @@ async function navigate(url: string, options: { isPopState?: boolean; replace?: 
     isTransitioning = false;
     currentNavigation = null;
     stopLoading();
+    // The container may have been replaced by the swap, so clear the flag on
+    // whichever element is live now rather than the one captured above.
+    getContainer()?.removeAttribute('aria-busy');
   }
 }
 
@@ -575,6 +584,13 @@ export function initRuntime(config?: PushaConfig): void {
     if (document.readyState === 'complete') warmupNavLinks();
     else window.addEventListener('load', () => warmupNavLinks());
     document.addEventListener('pjax:content-swap', () => warmupNavLinks());
+  }
+
+  // Viewport warmup — re-observed after each swap, since the swapped-in
+  // container brings new cards and the old observations died with it.
+  if (resolved.prefetchConfig && resolved.prefetchInViewport) {
+    observeViewportPrefetch();
+    document.addEventListener('pjax:content-swap', () => observeViewportPrefetch(getContainer() ?? document));
   }
 
   if (resolved.analytics !== false) {

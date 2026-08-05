@@ -16,6 +16,7 @@ const runtime = await import('../src/runtime.ts');
 const hooks = await import('../src/hooks.ts');
 const registryModule = await import('../src/registry.ts');
 const activeLinksModule = await import('../src/active-links.ts');
+const prefetchModuleTop = await import('../src/prefetch.ts');
 
 let fixture: DomFixture;
 
@@ -72,6 +73,7 @@ beforeEach(() => {
   hooks._resetHooksForTests();
   registryModule.registry._resetForTests();
   activeLinksModule._resetActiveLinksForTests();
+  prefetchModuleTop._resetPrefetchForTests();
 });
 
 afterEach(() => {
@@ -199,7 +201,7 @@ test('analytics bridge fires Shopify.analytics.page on every swap', async () => 
   await new Promise((r) => setTimeout(r, 100));
 
   assert.equal(analyticsPageCalls, 1);
-  assert.deepEqual(analyticsPublishCalls, ['page_viewed']);
+  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed', 'page_viewed']);
 });
 
 test('analytics re-publishes theme-serialized page-type Customer Events on swap', async () => {
@@ -220,9 +222,18 @@ test('analytics re-publishes theme-serialized page-type Customer Events on swap'
   document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
   await new Promise((r) => setTimeout(r, 100));
 
-  assert.deepEqual(analyticsPublishCalls, ['page_viewed', 'product_viewed']);
+  assert.deepEqual(analyticsPublishCalls, [
+    'pusha:page_viewed',
+    'pusha:product_viewed',
+    'page_viewed',
+    'product_viewed',
+  ]);
   const productEvent = analyticsPublishPayloads.find((p) => p.event === 'product_viewed');
   assert.deepEqual(productEvent?.payload, { productVariant: { id: 42 } });
+  // The prefixed copy carries the identical theme-serialized payload — that is
+  // the one a companion pixel actually receives.
+  const prefixed = analyticsPublishPayloads.find((p) => p.event === 'pusha:product_viewed');
+  assert.deepEqual(prefixed?.payload, { productVariant: { id: 42 } });
 });
 
 test('analytics accepts an array of serialized page-type events', async () => {
@@ -241,7 +252,14 @@ test('analytics accepts an array of serialized page-type events', async () => {
   document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
   await new Promise((r) => setTimeout(r, 100));
 
-  assert.deepEqual(analyticsPublishCalls, ['page_viewed', 'collection_viewed', 'search_submitted']);
+  assert.deepEqual(analyticsPublishCalls, [
+    'pusha:page_viewed',
+    'pusha:collection_viewed',
+    'pusha:search_submitted',
+    'page_viewed',
+    'collection_viewed',
+    'search_submitted',
+  ]);
 });
 
 test('analytics ignores malformed data-pusha-analytics-event JSON (no throw, page_viewed still fires)', async () => {
@@ -258,7 +276,7 @@ test('analytics ignores malformed data-pusha-analytics-event JSON (no throw, pag
   document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
   await new Promise((r) => setTimeout(r, 100));
 
-  assert.deepEqual(analyticsPublishCalls, ['page_viewed']);
+  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed', 'page_viewed']);
 });
 
 test('analytics ga4 bridge fires gtag page_view when enabled', async () => {
@@ -318,7 +336,35 @@ test('analytics ga4/dataLayer stay OFF by default (no double-count with Shopify 
 
   assert.equal(gtagCalls.length, 0, 'gtag is not auto-fired');
   assert.equal(dataLayer.length, 0, 'dataLayer is not auto-pushed');
-  assert.deepEqual(analyticsPublishCalls, ['page_viewed']);
+  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed', 'page_viewed']);
+});
+
+test('custom-event bridge publishes a prefixed page_viewed by default', async () => {
+  runtime.initRuntime();
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  // The unprefixed 'page_viewed' is rejected by Shopify (standard names are
+  // fenced); the prefixed one is the only call that reaches pixels.
+  assert.ok(analyticsPublishCalls.includes('pusha:page_viewed'));
+});
+
+test('custom-event bridge honours a custom prefix', async () => {
+  runtime.initRuntime({ analytics: { customEvents: 'softnav' } });
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.ok(analyticsPublishCalls.includes('softnav:page_viewed'));
+  assert.ok(!analyticsPublishCalls.includes('pusha:page_viewed'));
+});
+
+test('custom-event bridge can be disabled without disabling the rest', async () => {
+  runtime.initRuntime({ analytics: { customEvents: false } });
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.ok(!analyticsPublishCalls.some((n) => n.startsWith('pusha:')));
+  assert.ok(analyticsPublishCalls.includes('page_viewed'));
 });
 
 test('data-no-transition on link skips PJAX', async () => {
@@ -1074,7 +1120,7 @@ test('standardEvents: a missing @shopify/standard-events module never breaks nav
 
   // The swap completed and the other bridges still fired.
   assert.equal(document.querySelector('#MainContent')?.getAttribute('data-page-type'), 'product');
-  assert.deepEqual(analyticsPublishCalls, ['page_viewed']);
+  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed', 'page_viewed']);
   // The rejected import is swallowed by design — no warning, no throw.
   assert.equal(
     warns.filter((w) => w.includes('standard-events') || w.includes('PageViewEvent')).length,
@@ -1093,7 +1139,7 @@ test('standardEvents: false leaves the rest of the analytics bridge intact', asy
   await new Promise((r) => setTimeout(r, 100));
 
   assert.equal(analyticsPageCalls, 1);
-  assert.deepEqual(analyticsPublishCalls, ['page_viewed']);
+  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed', 'page_viewed']);
 });
 
 test('analytics: false disables every bridge, standardEvents included', async () => {
@@ -1111,4 +1157,201 @@ test('analytics: false disables every bridge, standardEvents included', async ()
 
   assert.equal(analyticsPageCalls, 0, 'analytics: false disables the Shopify bridge');
   assert.deepEqual(analyticsPublishCalls, [], 'and the publish calls with it');
+});
+
+// ─── Prefetch enhancements ──────────────────────────────────────────────────
+
+test('toPathKey strips tracking params and sorts the rest', async () => {
+  const { toPathKey } = await import('../src/prefetch.ts');
+
+  // Shopify's recommendation widgets append pr_* to every product link, which
+  // would otherwise fragment one product into a cache entry per referring
+  // section.
+  assert.equal(
+    toPathKey('/products/foo?pr_rec_id=abc&pr_prod_strat=hybrid&utm_source=ig'),
+    '/products/foo',
+  );
+  // Param order shouldn't split the cache.
+  assert.equal(toPathKey('/collections/all?b=2&a=1'), toPathKey('/collections/all?a=1&b=2'));
+  // Hash never changes server-rendered content.
+  assert.equal(toPathKey('/pages/about#team'), '/pages/about');
+});
+
+test('toPathKey preserves params that DO change the response', async () => {
+  const { toPathKey } = await import('../src/prefetch.ts');
+
+  // The deny-list must never eat a variant or a collection filter — dropping
+  // either would serve the wrong page from cache.
+  assert.equal(toPathKey('/products/foo?variant=42&utm_medium=email'), '/products/foo?variant=42');
+  assert.match(toPathKey('/collections/all?filter.v.price.gte=10'), /filter\.v\.price\.gte=10/);
+  assert.match(toPathKey('/collections/all?sort_by=price-ascending'), /sort_by=price-ascending/);
+});
+
+test('prefetch warms on focusin (keyboard parity with hover)', async () => {
+  const prefetchModule = await import('../src/prefetch.ts');
+  prefetchModule.invalidateCache();
+
+  runtime.initRuntime({ prefetchConfig: { product: { soft: 30000, hard: 300000 } } });
+
+  const link = document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!;
+  link.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 30));
+
+  assert.ok(
+    fetchCalls.some((c) => c.url.includes('/products/foo')),
+    'tabbing to a link warms it',
+  );
+});
+
+test('prefetch warms on mouse pointerdown, not just touch', async () => {
+  const prefetchModule = await import('../src/prefetch.ts');
+  prefetchModule.invalidateCache();
+
+  runtime.initRuntime({ prefetchConfig: { product: { soft: 30000, hard: 300000 } } });
+
+  const link = document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!;
+  // A fast mouse click lands inside the 100ms hover debounce; pointerdown is
+  // what rescues it.
+  link.dispatchEvent(
+    new window.PointerEvent('pointerdown', { bubbles: true, pointerType: 'mouse' }),
+  );
+  await new Promise((r) => setTimeout(r, 30));
+
+  assert.ok(
+    fetchCalls.some((c) => c.url.includes('/products/foo')),
+    'mouse pointerdown warms immediately',
+  );
+});
+
+test('container carries aria-busy during nav and drops it after', async () => {
+  // Hold the response open so the mid-flight state is deterministic — the
+  // beforeNav hooks are awaited before aria-busy is set, so asserting
+  // synchronously after click() races the lifecycle.
+  let resolveFetch: ((body: string) => void) | null = null;
+  (globalThis as Record<string, unknown>).fetch = async () =>
+    new Promise<Response>((resolve) => {
+      resolveFetch = (body: string) =>
+        resolve(new Response(body, { status: 200, headers: { 'Content-Type': 'text/html' } }));
+    });
+
+  runtime.initRuntime();
+
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(
+    document.querySelector('#MainContent')?.getAttribute('aria-busy'),
+    'true',
+    'aria-busy set while the region is mid-update',
+  );
+
+  resolveFetch!(makePageHtml('product', '<h1>Product</h1>'));
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.equal(
+    document.querySelector('#MainContent')?.hasAttribute('aria-busy'),
+    false,
+    'cleared on the swapped-in container, not the discarded one',
+  );
+});
+
+// ─── Trekkie bridge (admin reporting) ───────────────────────────────────────
+
+function installTrekkie() {
+  const calls: Array<{ name: unknown; props: Record<string, unknown> }> = [];
+  (window as unknown as { ShopifyAnalytics: unknown }).ShopifyAnalytics = {
+    lib: {
+      page: (name: unknown, props: Record<string, unknown>) => {
+        calls.push({ name, props });
+        return 'sh-test-event-id';
+      },
+      track: () => undefined,
+    },
+    meta: { currency: 'USD', page: { pageType: 'index' } },
+  };
+  return calls;
+}
+
+test('trekkie bridge is OFF by default', async () => {
+  const calls = installTrekkie();
+
+  runtime.initRuntime();
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.equal(calls.length, 0, 'undocumented global is not touched unless asked for');
+});
+
+test('trekkie bridge sends the theme-serialized identity, never reads meta', async () => {
+  const calls = installTrekkie();
+  const metaBefore = JSON.stringify(
+    (window as unknown as { ShopifyAnalytics: { meta: unknown } }).ShopifyAnalytics.meta,
+  );
+
+  fetchResponder = () => ({
+    status: 200,
+    body: makePageHtml(
+      'product',
+      `<h1>Product</h1>
+       <script type="application/json" data-pusha-trekkie-page>
+         {"pageType":"product","resourceId":8770736750680}
+       </script>`,
+    ),
+  });
+
+  runtime.initRuntime({ analytics: { trekkie: true } });
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.equal(calls.length, 1, 'one page() call per swap');
+  assert.equal(calls[0]!.name, null, 'called as page(null, props) like Shopify does');
+  // The measured finding: identity rides pageProps. Bare calls send an event
+  // with no page_type at all, so these two fields are the whole point.
+  assert.equal(calls[0]!.props.pageType, 'product');
+  assert.equal(calls[0]!.props.resourceId, 8770736750680);
+  assert.equal(calls[0]!.props.path, '/products/foo');
+
+  assert.equal(
+    JSON.stringify(
+      (window as unknown as { ShopifyAnalytics: { meta: unknown } }).ShopifyAnalytics.meta,
+    ),
+    metaBefore,
+    'ShopifyAnalytics.meta is shared state other scripts read — never written',
+  );
+});
+
+test('trekkie bridge no-ops without a serialized identity block', async () => {
+  const calls = installTrekkie();
+
+  runtime.initRuntime({ analytics: { trekkie: true } });
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.equal(calls.length, 0, 'no block, no call — Pusha never invents identity');
+});
+
+test('trekkie bridge survives ShopifyAnalytics disappearing', async () => {
+  // The global is undocumented and outside Shopify's Liquid compatibility
+  // guarantee. If it goes, admin reporting must undercount silently rather than
+  // throw or corrupt the navigation.
+  delete (window as unknown as { ShopifyAnalytics?: unknown }).ShopifyAnalytics;
+
+  fetchResponder = () => ({
+    status: 200,
+    body: makePageHtml(
+      'product',
+      `<h1>Product</h1>
+       <script type="application/json" data-pusha-trekkie-page>{"pageType":"product"}</script>`,
+    ),
+  });
+
+  runtime.initRuntime({ analytics: { trekkie: true } });
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.equal(
+    document.querySelector('#MainContent')?.getAttribute('data-page-type'),
+    'product',
+    'navigation completed regardless',
+  );
 });
