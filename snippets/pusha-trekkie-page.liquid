@@ -12,6 +12,12 @@
   This feeds Shopify admin's Analytics reports only. It does NOT reach web pixels
   (Meta, GA4, Klaviyo) — see docs/analytics-companion-pixel.md for those.
 
+  `resourceId` is omitted rather than emitted as null when the page has no
+  identifiable resource. `/collections/all` is the case you'll hit first: it's
+  Shopify's virtual catch-all collection and `collection.id` is nil there, so the
+  block correctly carries `pageType` alone. Verified populated on real products
+  and named collections.
+
   Usage:
     {% render 'pusha-trekkie-page' %}
 {% enddoc %}
