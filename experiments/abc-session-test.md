@@ -86,8 +86,18 @@ against a planned 7 and could not be compared to anything.
 1. Set the config in `snippets/pusha.liquid`, push the theme, confirm it's live.
 2. **Clear all site data** for the storefront domain. Re-enter the store
    password if prompted — do this *before* starting the count.
-3. Land on `/?utm_campaign=arm-a2` (use `arm-b2` / `arm-c2` for the others).
-   The campaign tag is what separates the arms in reporting.
+3. Land on the storefront.
+
+   ⚠ **UTM tagging does not work on a password-protected store** — a catch-22
+   that bites from both sides. A tag on the session's *first* request is
+   stripped by the `/password` redirect. A tag applied *after* the gate arrives
+   too late: the session already started when the password landed you on index,
+   and Shopify attributes sessions on **first touch**, so a mid-session UTM is
+   just another pageview. Every `utm_campaign` row came back blank.
+
+   Two ways around it: **turn off store password protection** (one toggle, and
+   closer to real conditions — then `/?utm_campaign=arm-b2` genuinely starts the
+   session), or **run one arm per hour** and let `TIMESERIES hour` separate them.
 4. Open DevTools. **Network** tab, filter `monorail`, enable **Preserve log**.
 5. In the Console, install the soft-nav counter:
 
@@ -113,24 +123,55 @@ minutes.
 
 ---
 
+## ✅ RESULT (2026-08-05) — the bridge works
+
+| Arm | Config | Swaps | `pageviews_per_session` |
+| --- | --- | --- | --- |
+| **C** | `trekkie: true` | 7–8 | **8.5** (6 sessions / 51 pageviews) |
+| **B** | `trekkie: false` | 7–8 | **~1** |
+
+**Admin counts soft navigations when the bridge is on.** Arm B is what makes it
+conclusive: it emits nothing on a swap but **prefetches identically**, so if
+prefetch requests were being counted, or if hard loads were the real source, B
+would have been inflated too. It wasn't — only the landing hard-load registered.
+
+The whole difference is the bridge. Inverted: **without it a Pusha storefront
+undercounts admin pageviews by roughly 8×, silently.**
+
+Arm A (`pjax: false`) was never run. It would confirm the absolute number, but B
+vs C already isolates the variable, so A is now a nice-to-have.
+
+---
+
 ## Reading it
 
-| When | Where | What |
-| --- | --- | --- |
-| Immediately | Live View | Do pageviews arrive per navigation at all? Pass/fail. |
-| +30 min | Sessions report | Session closed and counted. |
-| Next morning | Reports, filtered by campaign | Bot-filtered final numbers. The verdict. |
+⚠ **Live View cannot answer this.** It shows visitors and locations, not a
+countable pageview stream. An earlier version of this runbook named it as the
+primary read; that was wrong and cost a full test cycle.
+
+Query the ShopifyQL `sessions` schema instead — it exposes `pageviews`,
+`pageviews_per_session`, and a `human_or_bot_session` filter that settles the
+bot-filtering worry directly rather than by guesswork:
+
+```shopifyql
+FROM sessions
+  SHOW sessions, pageviews, pageviews_per_session
+  WHERE human_or_bot_session = 'human'
+  TIMESERIES hour DURING today
+```
+
+Run it with `shopify store execute`, or paste it into the admin's ShopifyQL
+editor. Data is queryable within the hour — the "~2 days elapsed" estimate in
+earlier notes was over-cautious.
 
 The number that matters is **pageviews per session**, per arm.
 
-Arm A defines correct: 1 session, 8 pageviews. Compare B and C to it.
-
 | Result | Meaning | What to do |
 | --- | --- | --- |
-| **B ≈ A** | Admin counts soft navs unaided | Drop the `trekkie` bridge — it's solving a problem that doesn't exist |
-| **C ≈ A**, B ≈ 1 pageview | The bridge works | Ship `trekkie` as the documented opt-in. Pusha is admin-correct. |
-| **C ≈ A**, B partial | Admin counts some, bridge completes it | Ship the bridge; document what B alone gets |
-| Neither ≈ A | Admin cannot be fixed from theme code | Stop building admin-correctness as a Pusha property. Publish the measured platform boundary; hold the story at "admin via GA4-direct, pixels via companion pixel." |
+| **B ≈ C** | Admin counts soft navs unaided | Drop the `trekkie` bridge — it's solving a problem that doesn't exist |
+| **C ≫ B**, B ≈ 1 | The bridge works | ✅ **This is what happened.** Ship `trekkie` as the documented opt-in. |
+| **C ≫ B**, B partial | Admin counts some, bridge completes it | Ship the bridge; document what B alone gets |
+| Both ≈ 1 | Admin cannot be fixed from theme code | Stop building admin-correctness as a Pusha property. Publish the measured platform boundary instead. |
 
 ---
 

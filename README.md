@@ -25,7 +25,7 @@ A soft navigation is not a document load. Shopify's platform does a set of thing
 
 - **Web pixels stop firing.** Anything wired through Customer Events — Meta, GA4, TikTok, Klaviyo, session replay — goes dark after the first page. This is measured, not assumed: across 7 soft navigations on a published new-Liquid store with a custom pixel subscribed to `all_events`, zero `page_viewed` and zero `product_viewed` arrived, while `clicked` events kept flowing the whole time. Both routes out of theme code are closed — `Shopify.analytics.publish` rejects standard event names by design, and re-dispatching `PageViewEvent` through `@shopify/standard-events` reaches nothing. Details in [Analytics & tracking](#analytics--tracking); full evidence in `experiments/native-vs-pusha/standard-events-probe.md`. If attribution matters on a route, don't PJAX that route.
 
-  Two partial mitigations exist. Prefixed **custom** events do reach pixels and can be forwarded to whichever vendors you wire up yourself ([companion pixel](docs/analytics-companion-pixel.md)) — but third-party app pixels won't understand them. And Shopify **admin** reporting is a separate pipe that *is* recoverable: with `analytics: { trekkie: true }` a soft navigation is counted as a pageview in admin, measured at **8.5 pageviews per session** on a published OS 2.0 store where PJAX was the only thing generating them. Neither mitigation restores installed marketing apps.
+  Two partial mitigations exist. Prefixed **custom** events do reach pixels and can be forwarded to whichever vendors you wire up yourself ([companion pixel](docs/analytics-companion-pixel.md)) — but third-party app pixels won't understand them. And Shopify **admin** reporting is a separate pipe that *is* recoverable: with `analytics: { trekkie: true }` a soft navigation is counted as a pageview in admin — **8.5 pageviews per session** against a **~1** control run with the bridge off, same click path, on a published OS 2.0 store. Leave it off and admin undercounts by roughly 8×. Neither mitigation restores installed marketing apps.
 - **Apps go stale or silent.** Pusha has not been built or tested against theme app extensions. App blocks inside the swapped region come back as inert HTML with dead JS; app embeds in the persistent shell survive but hold listeners pointing at replaced nodes; app-injected `<script>` tags initialize once and stay quiet after page one. There is no way to wrap code you don't own, so opt those pages out (`data-no-transition` on links into them, or `pjax: false` globally) until app support lands.
 - **The persistent shell freezes at first render.** Header, footer, and anything outside the container keep the Liquid output of whichever page the buyer landed on. Currency, customer state, localization, and cart context in those regions can drift from the current URL. Pusha syncs the head and the container; it does not re-render the shell. [Islands](#islands-section-rendering-api) exist for exactly this and will revalidate a marked region through the Section Rendering API — but you have to identify the stale-prone regions yourself, and anything you miss stays wrong silently.
 
@@ -275,17 +275,16 @@ No block → no call. Pusha never invents analytics identity.
 
 **Why it's off by default.** `window.ShopifyAnalytics` is undocumented and sits outside Shopify's Liquid compatibility guarantee — Liquid can stay stable while the JavaScript underneath is replaced. Every access is optional-chained, so if it disappears admin reporting silently *undercounts* rather than reporting wrong data. That's a deliberate trade: an honest gap beats confident garbage. Enable it knowingly.
 
-**Admin counts them — measured.** The paragraph above proves the event is *sent* with the right fields; this is the separate question of whether Shopify's reporting records it. Queried through the ShopifyQL `sessions` schema on a published OS 2.0 store after hand-browsing PJAX:
+**Admin counts them — measured against a control.** The paragraph above proves the event is *sent* with the right fields; this is the separate question of whether Shopify's reporting records it. Both arms hand-browsed the same click path on a published OS 2.0 store, queried through the ShopifyQL `sessions` schema:
 
-| Metric | Value |
-|---|---|
-| Sessions | 6 |
-| Pageviews | 51 |
-| **`pageviews_per_session`** | **8.5** |
+| Config | Swaps per session | `pageviews_per_session` |
+|---|---|---|
+| `trekkie: true` | 7–8 | **8.5** |
+| `trekkie: false` (control) | 7–8 | **~1** |
 
-For that to happen without soft navigations counting, 51 pages would have had to be hard-loaded by hand inside one hour. They weren't. A session's pageview count tracks the number of swaps.
+The control is what makes this conclusive. With `trekkie: false` Pusha emits nothing on a swap but **prefetches identically** — so if prefetch requests were being counted as pageviews, or if hard loads were the real source, the control would have been inflated too. It wasn't. Only the landing hard-load registered.
 
-⚠ **One control still outstanding.** A matching run with `trekkie: false` — where Pusha emits nothing on swap but prefetches identically — would rule out the possibility that prefetch requests are what inflate the count. Expect ≈1 pageview per session there. Until that's run, read 8.5 as strong evidence rather than proof.
+The entire difference between the two arms is the bridge. Put the other way: **without it, a Pusha storefront undercounts admin pageviews by roughly 8×, silently.**
 
 Known payload gaps on a soft nav, all still unverified: `canonical_url` comes from the document's `<link rel="canonical">` (head-sync should correct it, untested), `navigation_type` stays `"reload"` from the original load's Navigation Timing entry, and `microSessionId` doesn't rotate the way a hard load rotates it.
 
