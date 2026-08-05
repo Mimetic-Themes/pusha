@@ -6,12 +6,14 @@
 //   - lifecycle hooks (onBeforeNav, onBeforeLeave, onAfterSwap, onAfterInit)
 //     replace the implicit `window.theme.*` callbacks
 //   - cart is theme code: Pusha only listens for `cart:mutated` to invalidate
-//     the prefetch cache
+//     the prefetch cache, and bridges Shopify's standard cart events into that
+//     same signal so app-driven mutations count too (src/cart.ts)
 //   - analytics bridge is built-in and runs after every swap
 //   - a11y focus + screen reader announcement run automatically
 //   - design-mode (theme editor) disables PJAX and wires shopify:section:* events
 
 import { firePageView } from './analytics.js';
+import { installCartBridge, uninstallCartBridge } from './cart.js';
 import { getConfig, resolveConfig } from './config.js';
 import { checkContainer, log as dlog, recordNavigation, setDebug } from './diagnostics.js';
 import { announce, focusContainer, prefersReducedMotion } from './focus.js';
@@ -493,6 +495,18 @@ function handleLinkClick(event: MouseEvent): void {
     return;
   }
 
+  // A click on the URL you are already on — "Home" in the nav while on the home
+  // page. Left alone this refetches byte-identical HTML, swaps it in, and fires
+  // a second pageview for a page the buyer never left, inflating every
+  // navigation-derived metric. Scroll to top instead: that is what the full
+  // reload a browser would do looks like, minus the reload and the phantom view.
+  if (url.pathname === window.location.pathname && url.search === window.location.search) {
+    event.preventDefault();
+    scrollToTop();
+    dlog('nav', `same-URL click on ${url.pathname} — scrolled to top, no swap`);
+    return;
+  }
+
   event.preventDefault();
 
   // Async chain: fire onBeforeNav → optionally cancel → otherwise navigate.
@@ -573,6 +587,11 @@ export function initRuntime(config?: PushaConfig): void {
   window.addEventListener('popstate', handlePopState);
   document.addEventListener('cart:mutated', handleCartMutated);
 
+  // Feed `cart:mutated` from Shopify's standard cart events too, so cart
+  // changes an app made — which the theme never hears about — still invalidate
+  // the cache. See src/cart.ts for the settle-before-dispatch timing.
+  if (resolved.standardCartEvents !== false) installCartBridge();
+
   if (resolved.prefetchConfig) installPrefetch();
 
   // First-load lifecycle hook.
@@ -621,6 +640,7 @@ export function _resetForTests(): void {
     document.removeEventListener('click', handleLinkClick, true);
     window.removeEventListener('popstate', handlePopState);
     document.removeEventListener('cart:mutated', handleCartMutated);
+    uninstallCartBridge();
   }
   booted = false;
   isTransitioning = false;

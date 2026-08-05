@@ -23,9 +23,17 @@ export type PrefetchEntry = number | PrefetchTtl;
 export type PrefetchConfig = Partial<Record<TemplateType, PrefetchEntry>>;
 
 export interface AnalyticsConfig {
-  /** Shopify admin reporting + Customer Events bridge (page_viewed plus any
-   *  page-type events the theme serializes as data-pusha-analytics-event).
-   *  Defaults to true. */
+  /** `Shopify.analytics.page()` on swap — classic-theme admin reporting.
+   *  Defaults to true, but it is a thin bridge: the method is `undefined` on
+   *  every modern classic theme measured so far (the live entry point is
+   *  `ShopifyAnalytics.lib.page` — see `trekkie`) and absent on new-Liquid, so
+   *  it usually no-ops. Automatically SKIPPED when `trekkie` is on: both feed
+   *  the same pageview, and firing both double-counts.
+   *
+   *  It no longer publishes Customer Events. Standard event names are fenced
+   *  (`Shopify.analytics.publish` returns false for them), so those calls
+   *  landed nowhere; the page-type events a theme serializes as
+   *  `data-pusha-analytics-event` now go out prefixed via `customEvents`. */
   shopify?: boolean;
   /** Direct GA4 (gtag.js) page_view on swap. `true` fires when window.gtag
    *  exists; a measurement id (or array of ids) targets specific streams via
@@ -100,6 +108,21 @@ export interface PushaConfig {
   prefetchInViewport?: string;
   /** Routes (paths) whose prefetch entries should be flushed on `cart:mutated`. */
   cartStatefulRoutes?: string[];
+  /** Bridge Shopify's standard cart events (`shopify:cart:lines-update`,
+   *  `shopify:cart:discount-update`, `shopify:cart:note-update`) into Pusha's
+   *  `cart:mutated`. Defaults to true.
+   *
+   *  This is what catches cart changes the theme didn't make — an app calling
+   *  `Shopify.actions.updateCart` mutates the cart without ever telling the
+   *  theme, leaving cached pages showing a stale cart and badge. Pusha waits
+   *  for each event's `promise` to settle before dispatching, because the
+   *  standard events fire when the operation *starts*.
+   *
+   *  ⚠ A theme that already dispatches its own `cart:mutated` for the same
+   *  interaction will see two. Filter on
+   *  `event.detail.source === 'shopify-standard-events'`, or set this to false.
+   *  See src/cart.ts. */
+  standardCartEvents?: boolean;
 }
 
 export interface NavMeta {

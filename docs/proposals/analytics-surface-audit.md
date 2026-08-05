@@ -103,8 +103,11 @@ cart_viewed       → data.cart             probes templates/cart,       section
 Coverage is only asserted when the theme actually has the page — a headless or
 partial theme without `templates/cart*` is not missing a `cart_viewed`.
 
-`page_viewed` is special-cased: the runtime publishes it on every swap already,
-so a theme-supplied one is a **double-count**, ranked `warn`.
+`page_viewed` is special-cased: the runtime publishes a prefixed
+`pusha:page_viewed` on every swap already, so a theme-supplied `page_viewed`
+block is a **double-count** on the custom-event channel, ranked `warn`.
+(Under its bare standard name it is rejected by the platform outright and
+reaches nothing — the runtime no longer makes that call at all.)
 
 ### Ranks
 

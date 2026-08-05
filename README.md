@@ -113,6 +113,10 @@ Pusha expects a few markers on the markup it operates on. The `init` command + t
 
 Sections rendered **outside** the swap container (header, footer, cart drawer) persist across navigations — initialize them once via `setupGlobal` or `onFirstLoad`.
 
+**Links Pusha leaves alone:** cross-origin links, `target="_blank"`, `download`, modified clicks (⌘/Ctrl/Shift/Alt or non-primary button), Shopify-reserved routes (`/checkout`, `/account`, …), anything marked `data-no-transition`, and same-page `#hash` links, which keep native smooth-scroll.
+
+A click on the URL you are **already on** is also not a swap. It scrolls to top instead — what the browser's own reload looks like, minus the reload. Refetching byte-identical HTML would otherwise report a second view of a page the buyer never left, inflating every navigation-derived metric. A differing query string (`?sort_by=price`) is a real navigation and still swaps.
+
 ---
 
 ## Configuration
@@ -131,6 +135,7 @@ Set `window.theme.config` before the runtime boots. The `pusha.liquid` snippet d
     prefetchInViewport: '',              // selector whose links warm as they scroll into view (off unless set)
     disabledComponents: [],              // skip these by name on every nav
     cartStatefulRoutes: [],              // routes whose cache to flush on cart:mutated
+    standardCartEvents: true,            // bridge Shopify's standard cart events into cart:mutated
 
     prefetchConfig: {
       page:       { soft:  60000, hard: 300000 },
@@ -168,7 +173,7 @@ A PJAX swap is **not** a browser navigation, so nothing re-fires analytics on it
 >
 > > To ensure the quality of standard events, partners and merchants cannot publish standard events. `Shopify.analytics.publish` only exposes the method to publish custom events.
 >
-> So `publish('page_viewed', …)` and the `data-pusha-analytics-event` payloads below are **rejected** — the call returns `false` and no pixel receives the event.
+> So publishing under a standard name is **rejected** — the call returns `false` and no pixel receives the event. Pusha used to make those calls anyway (`publish('page_viewed', …)` plus the `data-pusha-analytics-event` payloads under their own names); they have been removed, since a call that provably cannot land reads like a working pixel path to anyone skimming the code.
 >
 > The other candidate route is closed too, and this one was measured rather than reasoned about. Re-dispatching `PageViewEvent` through `@shopify/standard-events` — a documented surface, no internals involved — reaches the sandbox on a hard load and **not at all** on a swap: 7 soft navigations, 0 `page_viewed`, 0 `product_viewed`, with `clicked` events arriving throughout to prove the pixel was live the whole time. Standard-events is dispatch-only. Procedure and evidence: `experiments/native-vs-pusha/standard-events-probe.md`.
 >
@@ -207,9 +212,13 @@ analytics: {
 
 ### 1. Shopify (`Shopify.analytics.page()`) — on by default
 
-Every swap calls `Shopify.analytics.page()`, the Trekkie/Monorail pageview that feeds Shopify admin reporting on classic themes. On new-Liquid themes this method is **absent** and the call safely no-ops (verified in `experiments/native-vs-pusha/results.md`), so the admin pageview channel is classic-only.
+Every swap calls `Shopify.analytics.page()`, the pageview that feeds Shopify admin reporting on classic themes. On new-Liquid themes this method is **absent** and the call safely no-ops (verified in `experiments/native-vs-pusha/results.md`).
 
-The same bridge also calls `Shopify.analytics.publish('page_viewed', …)` and re-publishes any page-type payloads the theme serialized. **Both of those calls are rejected by the platform** — see the gap above. They remain in the code because the surrounding lifecycle is correct and the calls are harmless no-ops, but they are not a working pixel path and should not be counted on. Reaching pixels needs either a platform change or a merchant-authored custom pixel (see below).
+In practice this bridge is thinner than it looks: on the classic OS 2.0 store used for the Monorail probe, `Shopify.analytics.page` was **`undefined`** too — the live entry point there is `ShopifyAnalytics.lib.page`, which is what the [`trekkie`](#1b-trekkie-trekkie--admin-reporting-off-by-default) bridge calls. Treat this one as a fallback for themes where the method does exist, not as the admin-reporting story.
+
+It is **skipped automatically when `trekkie` is on**. Both bridges re-fire the same storefront pageview, so on a theme where both are live, running both would send two pageviews per navigation — inflating admin counts and reading as a success in the very A/B measurement the trekkie bridge exists to pass.
+
+This bridge no longer publishes Customer Events. It used to call `Shopify.analytics.publish('page_viewed', …)` and re-publish the theme's serialized page-type payloads under their standard names; those calls are **rejected by the platform** (see the gap above), so they were removed rather than left in as no-ops that read like a working pixel path. The serialized payloads now go out prefixed via `customEvents` below.
 
 ### 1a. Custom events (`customEvents`) — on by default
 
@@ -496,7 +505,7 @@ Dispatched on `document`:
 | `pjax:before-nav` | `{ url, event }` | Cancelable. `preventDefault()` on the CustomEvent falls through to a full nav. |
 | `pjax:content-swap` | `{ url, template, cached }` | Fires after `onAfterInit`. |
 | `pjax:islands-revalidated` | `{ sectionIds }` | Fires after Section Rendering API revalidation. |
-| `cart:mutated` | `{ source, cart?, lastOperation? }` | **The theme dispatches this** after any cart change. Pusha listens and invalidates prefetch. |
+| `cart:mutated` | `{ source, cart?, lastOperation? }` | **The theme dispatches this** after any cart change. Pusha listens and invalidates prefetch — and also dispatches it itself, with `source: 'shopify-standard-events'`, when a standard cart event settles. See [Cart](#cart). |
 
 ### Islands (Section Rendering API)
 
@@ -534,6 +543,31 @@ The payload shape is **the contract**: any code that subscribes to `cart:mutated
 By default, *all* prefetched entries are flushed on `cart:mutated`. Themes that know which routes display cart state can scope this with `window.theme.config.cartStatefulRoutes`.
 
 **Bridging from theme-internal cart events:** Dawn-derived themes (Dawn and its forks) ship their own internal pubsub (`assets/pubsub.js` + `PUB_SUB_EVENTS.cartUpdate` in `assets/constants.js`). For those themes the porter agent adds a one-line bridge that subscribes to the internal event and re-dispatches `cart:mutated` on `document`. See `skill/PATTERNS.md`.
+
+#### Cart changes the theme didn't make (`standardCartEvents`)
+
+The contract above covers cart changes *your theme* makes. It cannot cover the ones it doesn't: an app that adds a line through [`Shopify.actions.updateCart`](https://shopify.dev/docs/api/storefront-events-and-actions/actions/update-cart) mutates the cart without ever telling the theme, and every prefetched page keeps rendering the old cart badge.
+
+Pusha closes that on its own by subscribing to Shopify's [standard storefront events](https://shopify.dev/docs/api/storefront-events-and-actions/events), the platform vocabulary every theme and app shares:
+
+| Event | Meaning |
+|---|---|
+| `shopify:cart:lines-update` | lines added, updated, or removed |
+| `shopify:cart:discount-update` | discount codes applied or removed |
+| `shopify:cart:note-update` | cart note changed |
+
+Each one is re-dispatched as `cart:mutated` with `detail.source === 'shopify-standard-events'`. `updateCart` "emits the matching cart events as it starts", so app-driven mutations arrive with no per-app wiring. On by default; `standardCartEvents: false` turns it off.
+
+**The events fire *before* the cart is updated** — that's what lets a theme show an optimistic state — so Pusha waits on each event's `promise` and dispatches only once it settles. Reacting on arrival would be worse than not listening at all: a prefetch landing in that window would re-cache the *old* cart and stamp it fresh. A rejected promise dispatches nothing, because a failed or superseded update leaves the cart, and the cache, as it was.
+
+⚠ If your theme already dispatches its own `cart:mutated` for a buyer's own cart interaction, it will now see two events for that one interaction — its own and the bridge's. Pusha's own handler is idempotent, but a theme handler that re-fetches a cart section will run twice. Filter on the source:
+
+```js
+document.addEventListener('cart:mutated', (event) => {
+  if (event.detail?.source === 'shopify-standard-events') return; // already handled
+  // …
+});
+```
 
 ---
 

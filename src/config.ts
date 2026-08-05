@@ -4,13 +4,17 @@
 import type { PushaConfig } from './types.js';
 
 const DEFAULTS: Required<
-  Pick<PushaConfig, 'pjax' | 'debug' | 'analytics' | 'transitions' | 'containerSelector'>
+  Pick<
+    PushaConfig,
+    'pjax' | 'debug' | 'analytics' | 'transitions' | 'containerSelector' | 'standardCartEvents'
+  >
 > = {
   pjax: true,
   debug: false,
   analytics: true,
   transitions: true,
   containerSelector: '#MainContent',
+  standardCartEvents: true,
 };
 
 let resolved: PushaConfig = { ...DEFAULTS };

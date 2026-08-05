@@ -24,7 +24,7 @@ What `data-section-type` and `sectionInits[handle](root)` plug into. On every PJ
    - Runs `registry.setupGlobal()` once for any newly-registered components.
    - Walks `newContainer.querySelectorAll('[data-section-type]')` and calls `window.theme.sectionInits[handle](root)` for each match.
    - Fires `onAfterSwap` → `onAfterInit` hooks and the legacy `pjax:content-swap` event.
-8. Fires the Shopify analytics bridge (`Shopify.analytics.page()` + `publish('page_viewed')` — the `publish` call is rejected by the platform and does **not** reach Web Pixels; see README "Analytics & tracking"), then a11y focus + screen-reader announcement of the new title.
+8. Fires the analytics bridges — a prefixed `pusha:page_viewed` custom event (the only publish path that reaches Web Pixels), plus `Shopify.analytics.page()` or `ShopifyAnalytics.lib.page()` for admin reporting, never both. Publishing under standard event names is rejected by the platform, so Pusha does not attempt it; see README "Analytics & tracking". Then a11y focus + screen-reader announcement of the new title.
 9. For cached navs, revalidates `[data-island]` sections via Shopify's Section Rendering API in the background.
 
 What this implies for wrappers:

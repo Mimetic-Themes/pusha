@@ -1,49 +1,45 @@
 // Analytics bridge. Re-fires page-view analytics on every PJAX swap so admin
-// reporting and any *direct* GA4 / GTM install in the theme keep working.
-// Without this, every storefront on Pusha silently under-reports: a PJAX swap
-// is not a browser navigation, so nothing re-fires on its own.
+// reporting, web pixels, and any *direct* GA4 / GTM install in the theme keep
+// working. Without this, every storefront on Pusha silently under-reports: a
+// PJAX swap is not a browser navigation, so nothing re-fires on its own.
 //
-// ⚠ KNOWN GAP — this bridge does NOT reach Web Pixels. Shopify's Web Pixels
-// Manager initializes once per document and is not re-initialized on a soft
-// nav, and `Shopify.analytics.publish` publishes CUSTOM EVENTS ONLY:
+// ⚠ THE FENCE — `Shopify.analytics.publish` publishes CUSTOM EVENTS ONLY:
 //
 //   "To ensure the quality of standard events, partners and merchants cannot
 //    publish standard events. Shopify.analytics.publish only exposes the
 //    method to publish custom events."
 //   — https://shopify.dev/docs/api/web-pixels-api/emitting-data
 //
-// So publish('page_viewed') and the serialized page-type events below are
-// REJECTED: the call returns false, no pixel receives them, and app pixels
-// (Meta, GA4, TikTok, Klaviyo) stay dark after the first page. The calls are
-// kept because they are harmless no-ops and the lifecycle around them is
-// correct, but they are NOT a working pixel path. The documented route is a
-// namespaced custom event + a merchant-authored custom pixel — that's the
-// `customEvents` bridge below (on by default). ⚠ It reaches pixels, but it does
-// NOT restore third-party app pixels (Meta/Klaviyo don't know the prefixed
-// names) and cannot feed Shopify admin reporting. Unverified on a live sandbox.
+// So publishing under a STANDARD name (`page_viewed`, `product_viewed`, …) is
+// rejected: the call returns false and no pixel receives it. Pusha used to make
+// those calls anyway, on the theory that they were harmless no-ops ready for a
+// future supported path. They are removed — a call that provably cannot land
+// reads as a working pixel path to anyone skimming this file, and that is worse
+// than the byte it saves. The supported route is a namespaced custom event plus
+// a merchant-authored custom pixel: the `customEvents` bridge below, on by
+// default. ⚠ It reaches pixels, but it does NOT restore third-party app pixels
+// (Meta/Klaviyo don't know the prefixed names) and cannot feed Shopify admin
+// reporting — `trekkie` is the bridge for that.
 // See docs/analytics-companion-pixel.md and README "Analytics & tracking".
 //
-// FOUR bridges, each switchable via the `analytics` config:
+// SIX bridges, each switchable via the `analytics` config:
 //
-//   analytics: true                                       → shopify on, standardEvents auto, ga4/dataLayer off (default)
-//   analytics: false                                      → all off
-//   analytics: { shopify, standardEvents, ga4, dataLayer }→ per-bridge control
+//   analytics: true   → shopify on, standardEvents auto, customEvents on,
+//                       ga4/dataLayer/trekkie off (default)
+//   analytics: false  → all off
+//   analytics: { … }  → per-bridge control
 //
-//   1. shopify  — Shopify.analytics.page() [admin reporting, classic themes;
-//                 the method is absent on new-Liquid and no-ops there]
-//                 PLUS publish('page_viewed') and the page-type events the
-//                 theme serializes as
-//                   <script type="application/json" data-pusha-analytics-event>
-//                     { "name": "product_viewed", "data": { … } }
-//                   </script>
-//                 Those publish() calls are rejected — see the gap above. The
-//                 payload shape is kept correct so it's ready if a supported
-//                 publish path appears. Opt-in per page — no script, no event,
-//                 so Pusha never invents analytics data.
+//   1. shopify  — Shopify.analytics.page() only. Classic-theme admin reporting,
+//                 and a thin one: the method is `undefined` on every modern
+//                 classic theme measured so far (the live entry point is
+//                 `ShopifyAnalytics.lib.page` — see `trekkie`) and absent on
+//                 new-Liquid. Kept for themes where it does exist, and SKIPPED
+//                 when `trekkie` is on, since both feed the same pageview and
+//                 firing both would double-count.
 //   2. ga4      — window.gtag('event','page_view', …). For a *direct* gtag.js
 //                 install in the theme. Currently the only GA4 path Pusha can
 //                 keep alive across swaps; GA4 routed through Customer Events
-//                 is covered by nothing (see the gap). Off by default.
+//                 needs the companion pixel. Off by default.
 //   3. dataLayer— window.dataLayer.push({ event, … }) for GTM. Off by default.
 //   4. standardEvents — @shopify/standard-events PageViewEvent, re-dispatched on
 //                 swap for new-Liquid themes (their page-view-event.js fires only
@@ -51,11 +47,13 @@
 //                 navs). 'auto' by default: no-ops unless the theme ships
 //                 @shopify/standard-events (resolved via the theme's importmap).
 //                 Page-type events self-heal via <s-view-event> — not re-fired here.
-//                 UNVERIFIED whether this channel reaches the web pixel sandbox.
-//                 It is a documented-surface call rather than an internals hack,
-//                 so if the platform bridges it, it's a supported answer to the
-//                 gap above — but that needs the pixel sandbox on a published
-//                 store to confirm. Don't claim it as a pixel fix until then.
+//                 MEASURED not to reach the web pixel sandbox; it is a
+//                 documented-surface call, so it stays as the forward-compatible
+//                 channel, but don't claim it as a pixel fix.
+//   5. customEvents — prefixed custom events. The only publish path that clears
+//                 the fence above and reaches pixels. On by default.
+//   6. trekkie  — ShopifyAnalytics.lib.page(), the pipe behind admin Analytics.
+//                 Off by default (undocumented global). See its own block below.
 //
 // Every channel is best-effort: absent globals are silent no-ops; nothing here
 // throws or blocks navigation.
@@ -105,10 +103,9 @@ function resolveBridges(): Required<AnalyticsConfig> {
 
 export function firePageView(meta?: NavMeta): void {
   const bridges = resolveBridges();
-  // Parsed once and shared: both Shopify bridges read the same serialized
-  // blocks, and re-parsing would double every malformed-JSON warning.
-  const serialized =
-    bridges.customEvents !== false || bridges.shopify ? readSerializedEvents() : [];
+  // Only the custom-event bridge reads these now — the standard-name publishes
+  // that used to share the parse were rejected by the platform and are gone.
+  const serialized = bridges.customEvents !== false ? readSerializedEvents() : [];
   if (bridges.customEvents !== false) {
     fireCustomEvents(
       bridges.customEvents === true ? 'pusha' : bridges.customEvents,
@@ -117,7 +114,7 @@ export function firePageView(meta?: NavMeta): void {
     );
   }
   if (bridges.trekkie) fireTrekkie(meta);
-  if (bridges.shopify) fireShopify(serialized, meta);
+  if (bridges.shopify) fireShopify(bridges.trekkie);
   if (bridges.ga4 !== false) fireGa4(bridges.ga4);
   if (bridges.dataLayer !== false) fireDataLayer(bridges.dataLayer);
   // Async, fire-and-forget: dynamic import + dispatch shouldn't block the nav
@@ -125,33 +122,27 @@ export function firePageView(meta?: NavMeta): void {
   if (bridges.standardEvents !== false) void fireStandardEvents(meta);
 }
 
-function fireShopify(serialized: SerializedEvent[], meta?: NavMeta): void {
+// `Shopify.analytics.page()` — the whole of this bridge. Its publish() calls
+// were removed: standard event names are fenced (see the header), so they
+// landed nowhere, and the prefixed copies already go out via `customEvents`.
+//
+// Skipped entirely when `trekkie` is on. Both bridges exist to re-fire the one
+// storefront pageview; on a theme where `Shopify.analytics.page` is defined,
+// running both would send two pageviews per navigation. That would inflate
+// admin counts and — worse for the A/B/C measurement this was built for — read
+// as a success when it is a double-count.
+function fireShopify(trekkieEnabled: boolean): void {
+  if (trekkieEnabled) {
+    dlog('analytics', 'shopify bridge skipped — trekkie owns the pageview');
+    return;
+  }
   const analytics = window.Shopify?.analytics;
   if (!analytics) return;
-
-  const url = meta?.url
-    ? new URL(meta.url, window.location.origin).href
-    : window.location.href;
 
   try {
     analytics.page?.();
   } catch (err) {
     console.warn('[pusha/analytics] page() threw', err);
-  }
-
-  try {
-    analytics.publish?.('page_viewed', { url });
-  } catch (err) {
-    console.warn('[pusha/analytics] publish(page_viewed) threw', err);
-  }
-
-  // Page-type events the theme serialized for the page just swapped in.
-  for (const evt of serialized) {
-    try {
-      analytics.publish?.(evt.name, evt.data);
-    } catch (err) {
-      console.warn(`[pusha/analytics] publish(${evt.name}) threw`, err);
-    }
   }
 }
 

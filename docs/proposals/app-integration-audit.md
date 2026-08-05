@@ -26,8 +26,11 @@ depends on the new-Liquid platform surface).
 
 Plus the case already partly covered: an app that mutates the cart through its
 own path bypasses the theme's `cart:mutated` dispatch, so Pusha's prefetch cache
-goes stale and the cart badge/drawer desync. Part 2 fixes this at the contract
-level via Standard Actions.
+goes stale and the cart badge/drawer desync. **This one is now fixed** at the
+contract level via the standard cart events — see Part 2a, shipped in
+`src/cart.ts`. It covers apps that route through `Shopify.actions.updateCart`
+or dispatch the standard events; an app doing raw `/cart/add.js` with no event
+is still invisible, and still needs the honest posture below.
 
 ---
 
@@ -107,20 +110,41 @@ the platform asks).
 Shopify's new-Liquid preview shipped the two primitives that convert Pusha's most
 bespoke app-facing subsystems into subscriptions against a platform contract.
 
-### 2a. Cart interop via Standard Actions
+### 2a. Cart interop via Standard Actions — ✅ BUILT (`src/cart.ts`)
 
 `Shopify.actions.updateCart / openCart / getCart` are on every Liquid storefront,
 and *"when a configured action succeeds, the action runtime auto-emits the
 matching standard events."* So:
 
 - Add a **standard-events cart bridge**: subscribe to the cart standard event and
-  re-dispatch Pusha's existing `cart:mutated` (source `'shopify-actions'`).
+  re-dispatch Pusha's existing `cart:mutated`.
 - **This captures app-driven cart mutations Pusha currently misses** — any app
   routing through `Shopify.actions.updateCart` becomes visible with zero
   per-theme wiring. The Dawn-family `pubsub` bridge stays the fallback for
   classic themes; on new-Liquid, standard-events is the canonical source.
-- Gated `'auto'` like the analytics standard-events path: no-op when the action
-  runtime/global is absent (classic themes).
+
+**Shipped, with three corrections to the sketch above:**
+
+1. **Three events, not one.** `shopify:cart:lines-update`,
+   `shopify:cart:discount-update`, `shopify:cart:note-update`. `cart:view` is
+   excluded (opening a drawer is not a mutation) and so is `cart:error` (a
+   failed mutation leaves the cart, and the cache, as it was).
+2. **Not gated `'auto'` on `Shopify.actions`.** That gate would be a no-op —
+   `Shopify.actions` was measured present on classic OS 2.0 as well, so it
+   discriminates nothing. Three passive listeners cost nothing on a theme that
+   dispatches no standard events, so the bridge installs unconditionally under
+   `standardCartEvents` (default `true`).
+3. **★ It must wait for the event's `promise`.** The docs are explicit that
+   these events fire *before* the cart is updated, so the theme can show an
+   optimistic state. Invalidating on arrival would be worse than not listening:
+   a prefetch landing between the event and the server applying the change
+   would re-cache the OLD cart and stamp it fresh. The bridge dispatches
+   `cart:mutated` only once the promise settles, and dispatches nothing on
+   rejection.
+
+Source is `'shopify-standard-events'` (not `'shopify-actions'` as sketched — the
+bridge subscribes to the event vocabulary, which also carries mutations the
+theme itself dispatched, not just action-driven ones).
 
 ### 2b. App re-init — what we can do vs. what needs the platform
 

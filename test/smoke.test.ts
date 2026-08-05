@@ -201,7 +201,44 @@ test('analytics bridge fires Shopify.analytics.page on every swap', async () => 
   await new Promise((r) => setTimeout(r, 100));
 
   assert.equal(analyticsPageCalls, 1);
-  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed', 'page_viewed']);
+  // Only the prefixed custom event goes out. Publishing under the standard name
+  // is fenced by the platform ("partners and merchants cannot publish standard
+  // events"), so Pusha no longer makes a call it knows will be rejected.
+  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed']);
+});
+
+test('the shopify bridge stands down when trekkie is on (no double pageview)', async () => {
+  // Both bridges exist to re-fire the one storefront pageview. On a theme where
+  // Shopify.analytics.page IS defined, running both sends two pageviews per
+  // navigation — which inflates admin counts and would read as a success in the
+  // A/B/C measurement this was built for.
+  const calls = installTrekkie();
+
+  fetchResponder = () => ({
+    status: 200,
+    body: makePageHtml(
+      'product',
+      `<h1>Product</h1>
+       <script type="application/json" data-pusha-trekkie-page>{"pageType":"product"}</script>`,
+    ),
+  });
+
+  runtime.initRuntime({ analytics: { shopify: true, trekkie: true } });
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.equal(calls.length, 1, 'trekkie sends the pageview');
+  assert.equal(analyticsPageCalls, 0, 'Shopify.analytics.page() does NOT also fire');
+});
+
+test('the shopify bridge still fires when trekkie is off', async () => {
+  installTrekkie();
+
+  runtime.initRuntime({ analytics: { shopify: true, trekkie: false } });
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.equal(analyticsPageCalls, 1, 'the bridge is trimmed, not removed');
 });
 
 test('analytics re-publishes theme-serialized page-type Customer Events on swap', async () => {
@@ -222,16 +259,10 @@ test('analytics re-publishes theme-serialized page-type Customer Events on swap'
   document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
   await new Promise((r) => setTimeout(r, 100));
 
-  assert.deepEqual(analyticsPublishCalls, [
-    'pusha:page_viewed',
-    'pusha:product_viewed',
-    'page_viewed',
-    'product_viewed',
-  ]);
-  const productEvent = analyticsPublishPayloads.find((p) => p.event === 'product_viewed');
-  assert.deepEqual(productEvent?.payload, { productVariant: { id: 42 } });
-  // The prefixed copy carries the identical theme-serialized payload — that is
-  // the one a companion pixel actually receives.
+  // Prefixed only — `product_viewed` under its standard name is rejected, so
+  // that call is gone. The theme's serialized payload rides the prefixed copy,
+  // which is the one a companion pixel actually receives.
+  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed', 'pusha:product_viewed']);
   const prefixed = analyticsPublishPayloads.find((p) => p.event === 'pusha:product_viewed');
   assert.deepEqual(prefixed?.payload, { productVariant: { id: 42 } });
 });
@@ -256,9 +287,6 @@ test('analytics accepts an array of serialized page-type events', async () => {
     'pusha:page_viewed',
     'pusha:collection_viewed',
     'pusha:search_submitted',
-    'page_viewed',
-    'collection_viewed',
-    'search_submitted',
   ]);
 });
 
@@ -276,7 +304,7 @@ test('analytics ignores malformed data-pusha-analytics-event JSON (no throw, pag
   document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
   await new Promise((r) => setTimeout(r, 100));
 
-  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed', 'page_viewed']);
+  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed']);
 });
 
 test('analytics ga4 bridge fires gtag page_view when enabled', async () => {
@@ -336,7 +364,7 @@ test('analytics ga4/dataLayer stay OFF by default (no double-count with Shopify 
 
   assert.equal(gtagCalls.length, 0, 'gtag is not auto-fired');
   assert.equal(dataLayer.length, 0, 'dataLayer is not auto-pushed');
-  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed', 'page_viewed']);
+  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed']);
 });
 
 test('custom-event bridge publishes a prefixed page_viewed by default', async () => {
@@ -363,8 +391,35 @@ test('custom-event bridge can be disabled without disabling the rest', async () 
   document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
   await new Promise((r) => setTimeout(r, 100));
 
-  assert.ok(!analyticsPublishCalls.some((n) => n.startsWith('pusha:')));
-  assert.ok(analyticsPublishCalls.includes('page_viewed'));
+  assert.deepEqual(analyticsPublishCalls, [], 'nothing is published at all');
+  // "the rest" is now checked on the Shopify bridge, since the custom events
+  // were the only publish() calls left once the fenced standard names went.
+  assert.equal(analyticsPageCalls, 1, 'the Shopify bridge still ran');
+});
+
+test('customEvents off leaves publish() untouched — Pusha makes no rejected calls', async () => {
+  // Guards the trim: a future change that reintroduces a standard-name publish
+  // would show up here as a call the platform is documented to reject.
+  fetchResponder = () => ({
+    status: 200,
+    body: makePageHtml(
+      'product',
+      `<h1>Product</h1>
+       <script type="application/json" data-pusha-analytics-event>
+         {"name":"product_viewed","data":{"productVariant":{"id":42}}}
+       </script>`,
+    ),
+  });
+
+  runtime.initRuntime({ analytics: { customEvents: false } });
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.deepEqual(
+    analyticsPublishCalls,
+    [],
+    'a serialized product_viewed must NOT be published under its standard name',
+  );
 });
 
 test('data-no-transition on link skips PJAX', async () => {
@@ -1120,7 +1175,7 @@ test('standardEvents: a missing @shopify/standard-events module never breaks nav
 
   // The swap completed and the other bridges still fired.
   assert.equal(document.querySelector('#MainContent')?.getAttribute('data-page-type'), 'product');
-  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed', 'page_viewed']);
+  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed']);
   // The rejected import is swallowed by design — no warning, no throw.
   assert.equal(
     warns.filter((w) => w.includes('standard-events') || w.includes('PageViewEvent')).length,
@@ -1139,7 +1194,7 @@ test('standardEvents: false leaves the rest of the analytics bridge intact', asy
   await new Promise((r) => setTimeout(r, 100));
 
   assert.equal(analyticsPageCalls, 1);
-  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed', 'page_viewed']);
+  assert.deepEqual(analyticsPublishCalls, ['pusha:page_viewed']);
 });
 
 test('analytics: false disables every bridge, standardEvents included', async () => {
@@ -1395,5 +1450,201 @@ test('head-sync does not re-inject a script whose tag died with the container', 
     document.querySelectorAll('script[src="/assets/facets.js"]').length,
     0,
     'second pass must NOT re-inject — that file already executed in this document',
+  );
+});
+
+// ─── Same-URL clicks ────────────────────────────────────────────────────────
+
+test('a click on the URL you are already on does not swap or fire a pageview', async () => {
+  // Left alone this refetches byte-identical HTML and reports a second view of
+  // a page the buyer never left, inflating every navigation-derived metric.
+  const container = document.querySelector('#MainContent')!;
+  container.insertAdjacentHTML('beforeend', '<a href="/" id="home-link">Home</a>');
+
+  runtime.initRuntime();
+  const before = fetchCalls.length;
+
+  document.querySelector<HTMLAnchorElement>('#home-link')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.equal(fetchCalls.length, before, 'no fetch for a page we are already on');
+  assert.equal(analyticsPageCalls, 0, 'no phantom pageview');
+  assert.deepEqual(analyticsPublishCalls, [], 'nothing published either');
+  assert.equal(window.location.pathname, '/', 'still on the same URL');
+});
+
+test('a same-path link with a DIFFERENT query string still navigates', async () => {
+  // The guard keys on path AND search — ?sort_by= on a collection is a real
+  // navigation to different content, not a click on the page you are on.
+  const container = document.querySelector('#MainContent')!;
+  container.insertAdjacentHTML('beforeend', '<a href="/?sort_by=price" id="sorted">Sort</a>');
+
+  runtime.initRuntime();
+
+  document.querySelector<HTMLAnchorElement>('#sorted')!.click();
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.ok(
+    fetchCalls.some((c) => c.url.includes('sort_by=price')),
+    'a differing query string is a real navigation',
+  );
+  assert.equal(analyticsPageCalls, 1);
+});
+
+// ─── Standard-events cart bridge ────────────────────────────────────────────
+
+interface CartEventInit {
+  action?: string;
+  context?: string;
+  promise?: Promise<unknown>;
+}
+
+// Standard events carry their payload as properties on the event object, not
+// under `detail`, and are dispatched from the cart or product element — so they
+// have to bubble to reach the document-level listener.
+function dispatchStandardCartEvent(type: string, init: CartEventInit = {}): void {
+  const event = new Event(type, { bubbles: true });
+  Object.assign(event, init);
+  document.querySelector('#MainContent')!.dispatchEvent(event);
+}
+
+function collectCartMutated(): Array<Record<string, unknown>> {
+  const seen: Array<Record<string, unknown>> = [];
+  document.addEventListener('cart:mutated', (e) => {
+    seen.push(((e as CustomEvent).detail ?? {}) as Record<string, unknown>);
+  });
+  return seen;
+}
+
+test('cart bridge waits for the promise to settle before dispatching cart:mutated', async () => {
+  // ★ The whole reason this bridge is not a one-line listener. The standard
+  // events fire BEFORE the cart is updated, so dispatching on arrival would let
+  // a prefetch land in the gap and re-cache the OLD cart as fresh.
+  const seen = collectCartMutated();
+  runtime.initRuntime();
+
+  let settle: (v: unknown) => void = () => {};
+  const promise = new Promise((resolve) => {
+    settle = resolve;
+  });
+
+  dispatchStandardCartEvent('shopify:cart:lines-update', {
+    action: 'add',
+    context: 'standard-action',
+    promise,
+  });
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(seen.length, 0, 'nothing dispatched while the cart update is still in flight');
+
+  settle({ cart: { totalQuantity: 1 } });
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(seen.length, 1, 'dispatched once the cart actually changed');
+  assert.equal(seen[0]!.source, 'shopify-standard-events');
+  assert.equal(seen[0]!.action, 'add');
+  assert.equal(seen[0]!.context, 'standard-action');
+});
+
+test('cart bridge invalidates the prefetch cache for an app-driven cart mutation', async () => {
+  // The payoff: an app calling Shopify.actions.updateCart never tells the theme,
+  // so without this every cached page keeps rendering the pre-mutation cart badge.
+  const prefetch = await import('../src/prefetch.ts');
+  runtime.initRuntime({ prefetchConfig: { product: 60_000 } });
+
+  await prefetch.prefetchPage('/products/foo');
+  assert.ok(prefetch.getCachedHtml('/products/foo'), 'cache primed');
+
+  const promise = Promise.resolve({ cart: { totalQuantity: 2 } });
+  dispatchStandardCartEvent('shopify:cart:lines-update', { action: 'add', promise });
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(
+    prefetch.getCachedHtml('/products/foo'),
+    null,
+    'pages cached with the old cart state are evicted',
+  );
+});
+
+test('cart bridge stays silent when the cart operation fails', async () => {
+  // A rejected promise means the request failed or was superseded, so the cart
+  // did not change and the cache is still correct. shopify:cart:error is the
+  // signal for failures.
+  const seen = collectCartMutated();
+  runtime.initRuntime();
+
+  dispatchStandardCartEvent('shopify:cart:lines-update', {
+    action: 'add',
+    promise: Promise.reject(new Error('network')),
+  });
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(seen.length, 0, 'a failed mutation does not invalidate anything');
+});
+
+test('cart bridge covers discount and note updates too', async () => {
+  const seen = collectCartMutated();
+  runtime.initRuntime();
+
+  dispatchStandardCartEvent('shopify:cart:discount-update', { promise: Promise.resolve({}) });
+  dispatchStandardCartEvent('shopify:cart:note-update', { promise: Promise.resolve({}) });
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.deepEqual(
+    seen.map((d) => d.event),
+    ['shopify:cart:discount-update', 'shopify:cart:note-update'],
+  );
+});
+
+test('cart bridge ignores cart:view — opening a drawer is not a mutation', async () => {
+  const seen = collectCartMutated();
+  runtime.initRuntime();
+
+  dispatchStandardCartEvent('shopify:cart:view', { promise: Promise.resolve({}) });
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(seen.length, 0);
+});
+
+test('cart bridge dispatches immediately for an event with no promise', async () => {
+  // `promise` is required by the spec, so this is a theme hand-rolling the
+  // event. Dropping it would lose a real cart mutation.
+  const seen = collectCartMutated();
+  runtime.initRuntime();
+
+  dispatchStandardCartEvent('shopify:cart:lines-update', { action: 'remove' });
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]!.action, 'remove');
+});
+
+test('standardCartEvents: false leaves the standard events alone', async () => {
+  const seen = collectCartMutated();
+  runtime.initRuntime({ standardCartEvents: false });
+
+  dispatchStandardCartEvent('shopify:cart:lines-update', {
+    action: 'add',
+    promise: Promise.resolve({}),
+  });
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(seen.length, 0, 'themes that dispatch their own cart:mutated can opt out');
+});
+
+test("the theme's own cart:mutated still works with the bridge installed", async () => {
+  const prefetch = await import('../src/prefetch.ts');
+  runtime.initRuntime({ prefetchConfig: { product: 60_000 } });
+
+  await prefetch.prefetchPage('/products/foo');
+  assert.ok(prefetch.getCachedHtml('/products/foo'), 'cache primed');
+
+  document.dispatchEvent(new CustomEvent('cart:mutated'));
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(
+    prefetch.getCachedHtml('/products/foo'),
+    null,
+    'the pre-existing theme-dispatched path is untouched',
   );
 });
