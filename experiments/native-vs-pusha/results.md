@@ -18,17 +18,38 @@ state destroyed.
 
 ## Arm A — native View Transitions + Speculation Rules
 
+> ⚠ **CORRECTED 2026-08-05 — the prerender finding below was WRONG.** Prerender
+> works fine on Shopify. Re-measured by hand in real Chrome on a production
+> Shopify storefront: `activationStart` **3341.2 ms**, a real activation. The
+> `0` recorded here was an artifact of this rig (Playwright + `shopify theme
+> dev` on localhost), not a platform limit — and Shopify's edge sends no
+> `Cache-Control: no-store`, so the "prerender-ineligible headers" hypothesis is
+> falsified outright. **The struck-through claims below are retained only as a
+> record of what the July rig produced. Do not cite them.** Full result,
+> procedure, and the three ways this measurement goes false-negative:
+> `../prerender-recheck.md`.
+
 - `@view-transition { navigation: auto }` **active**; Chromium supports VT + speculation rules. Smoothness: ✅.
-- **Prerender did NOT activate.** `navigation.activationStart` stayed `0` after link
+- ~~**Prerender did NOT activate.**~~ `navigation.activationStart` stayed `0` after link
   clicks at both `moderate` and `immediate` eagerness. The fast repeat TTFB (9 ms)
-  was HTTP disk cache, not prerender. The Shopify dev storefront's response headers
-  (or the automation context) appear to make pages **prerender-ineligible**.
-  ⚠ **Needs manual confirmation in a real Chrome against a real storefront** — if it
-  reproduces there, native's "instant nav" story is weak *on Shopify specifically*.
-- Non-prerendered nav = full document load, **100 scripts re-parsed**, + VT animation.
+  was HTTP disk cache, not prerender. ~~The Shopify dev storefront's response headers
+  (or the automation context) appear to make pages **prerender-ineligible**.~~
+  ✅ **Resolved: the automation context and/or the localhost dev server. Not the platform.**
+- ~~Non-prerendered nav~~ = full document load, **100 scripts re-parsed**, + VT animation.
+  Still true of any nav that *isn't* prerendered; a prerendered one front-loads that cost instead.
 - Shell state destroyed (new document). Safari: no speculation rules at all (not tested here, known-absent).
 
-**Net:** native delivered the *smoothness* but not the *instant* (prerender never fired) and by architecture cannot deliver warm-runtime or shell persistence.
+**Net (revised):** native delivers the smoothness **and the instant** on Chromium
+against real Shopify infrastructure. Pusha does not win on perceived latency
+there. What native cannot do by architecture is keep the runtime warm (5 scripts
+re-parsed per nav vs ~100) or preserve shell state — a prerendered document is
+still a *new* document. Those two, plus Safari/Firefox coverage, are the whole
+of Pusha's remaining advantage on new-Liquid.
+
+⚠ Testing this arm requires a theme with **no Pusha** installed. Pusha
+intercepts the click, so no document navigation occurs and a prerender can never
+activate — the two are mutually exclusive on any intercepted link. See
+`../prerender-recheck.md`.
 
 ## Arm B — Pusha SPA
 
