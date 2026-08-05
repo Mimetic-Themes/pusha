@@ -87,19 +87,36 @@ function loadScript(source: HTMLScriptElement): Promise<void> {
 // blocks navigation.
 //
 // (Function name kept for backwards compat; behavior is "syncScripts" now.)
+// Scripts already executed in this document, tracked across swaps.
+//
+// The DOM alone can't answer "have I loaded this?" — a script inside the swapped
+// container is destroyed with it, while its side effects (top-level `class`,
+// `const`, custom-element definitions) survive in the global scope forever.
+// Re-injecting on a return visit therefore re-executes and throws
+// "Identifier 'X' has already been declared", which kills the rest of that file.
+// Dawn hits this immediately: facets.js, show-more.js and product-info.js all
+// declare top-level classes from inside the section markup.
+//
+// Seeded once from the initial document, then union'd with the live DOM on every
+// pass so scripts added by other means still count. Mirrors __pushaSyncedStyles.
+function loadedScripts(): Set<string> {
+  window.__pushaLoadedScripts ??= new Set<string>();
+  const set = window.__pushaLoadedScripts;
+  for (const s of Array.from(document.querySelectorAll<HTMLScriptElement>('script[src]'))) {
+    set.add(new URL(s.src, window.location.href).href);
+  }
+  return set;
+}
+
 export async function syncHeadScripts(newDoc: Document): Promise<void> {
-  const existing = new Set(
-    Array.from(document.querySelectorAll<HTMLScriptElement>('script[src]')).map(
-      (s) => new URL(s.src, window.location.href).href,
-    ),
-  );
+  const loaded = loadedScripts();
 
   const toLoad = Array.from(newDoc.querySelectorAll<HTMLScriptElement>('script[src]'))
     .map((el) => ({
       el,
       href: new URL(el.getAttribute('src')!, window.location.href).href,
     }))
-    .filter(({ href }) => !existing.has(href));
+    .filter(({ href }) => !loaded.has(href));
 
   if (toLoad.length > 0) {
     dlog(
@@ -107,6 +124,9 @@ export async function syncHeadScripts(newDoc: Document): Promise<void> {
       `scripts: +${toLoad.length} new`,
       toLoad.map((s) => s.href),
     );
+    // Recorded before awaiting so two swaps in flight can't both queue the same
+    // file, which would race into the same redeclaration error.
+    for (const { href } of toLoad) loaded.add(href);
     await Promise.all(toLoad.map(({ el }) => loadScript(el)));
   }
 }

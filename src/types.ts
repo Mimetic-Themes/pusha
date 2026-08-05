@@ -165,5 +165,8 @@ declare global {
     /** GTM data layer. Present when Google Tag Manager is installed. */
     dataLayer?: unknown[];
     __pushaSyncedStyles?: Set<string>;
+    /** Script srcs already executed in this document. Survives container swaps,
+     *  because a script's global side effects do too even after its tag is gone. */
+    __pushaLoadedScripts?: Set<string>;
   }
 }

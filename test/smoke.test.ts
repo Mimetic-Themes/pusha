@@ -1355,3 +1355,45 @@ test('trekkie bridge survives ShopifyAnalytics disappearing', async () => {
     'navigation completed regardless',
   );
 });
+
+// ─── Head-sync script dedup ─────────────────────────────────────────────────
+
+test('head-sync does not re-inject a script whose tag died with the container', async () => {
+  // The DOM cannot answer "have I loaded this?". A script inside #MainContent is
+  // destroyed by the swap, while its top-level `class`/`const` declarations
+  // survive in global scope forever. Re-injecting re-executes and throws
+  // "Identifier 'X' has already been declared", killing the rest of that file.
+  // Measured on Dawn: returning to a collection re-injected facets.js and threw.
+  //
+  // NB: not awaited. loadScript() settles on the injected element's load/error
+  // event, and jsdom never fetches script srcs, so neither ever fires. The
+  // appendChild itself is synchronous, which is what this asserts on.
+  const headSync = await import('../src/head-sync.ts');
+  delete (window as unknown as { __pushaLoadedScripts?: Set<string> }).__pushaLoadedScripts;
+
+  const incoming = new DOMParser().parseFromString(
+    makePageHtml('collection', '<h1>Collection</h1><script src="/assets/facets.js"></script>'),
+    'text/html',
+  );
+
+  void headSync.syncHeadScripts(incoming);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(
+    document.querySelectorAll('script[src="/assets/facets.js"]').length,
+    1,
+    'first pass brings the script in',
+  );
+
+  // The swap replaces the container, taking the tag with it — but not the
+  // globals it declared.
+  document.querySelectorAll('script[src="/assets/facets.js"]').forEach((el) => el.remove());
+
+  void headSync.syncHeadScripts(incoming);
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(
+    document.querySelectorAll('script[src="/assets/facets.js"]').length,
+    0,
+    'second pass must NOT re-inject — that file already executed in this document',
+  );
+});
