@@ -23,13 +23,32 @@ We would not put this on a merchant store without measuring the trade-offs first
 
 A soft navigation is not a document load. Shopify's platform does a set of things exactly once per document — boots Web Pixels Manager, initializes app scripts, renders every Liquid value on the page against the current request — and a swap silently skips all of it. Pusha takes over some of that work and cannot take over the rest. What it cannot do is where merchant data breaks:
 
-- **Web pixels stop firing.** Anything wired through Customer Events — Meta, GA4, TikTok, Klaviyo, session replay — goes dark after the first page. This is measured, not assumed: across 7 soft navigations on a published new-Liquid store with a custom pixel subscribed to `all_events`, zero `page_viewed` and zero `product_viewed` arrived, while `clicked` events kept flowing the whole time. Both routes out of theme code are closed — `Shopify.analytics.publish` rejects standard event names by design, and re-dispatching `PageViewEvent` through `@shopify/standard-events` reaches nothing. Details in [Analytics & tracking](#analytics--tracking); full evidence in `experiments/native-vs-pusha/standard-events-probe.md`. If attribution matters on a route, don't PJAX that route.
+- **Installed app pixels stop firing mid-funnel.** Anything wired through Customer Events by an app — Meta, TikTok, Klaviyo, the Google & YouTube app, session replay — stops receiving events after the first page. Measured, not assumed: across 7 soft navigations on a published store with a custom pixel subscribed to `all_events`, zero `page_viewed` and zero `product_viewed` arrived, while `clicked` events kept flowing the whole time. Both routes out of theme code are closed — `Shopify.analytics.publish` rejects standard event names by design, and re-dispatching `PageViewEvent` through `@shopify/standard-events` reaches nothing. Evidence in `experiments/native-vs-pusha/standard-events-probe.md`.
 
-  Two partial mitigations exist. Prefixed **custom** events do reach pixels and can be forwarded to whichever vendors you wire up yourself ([companion pixel](docs/analytics-companion-pixel.md)) — but third-party app pixels won't understand them. And Shopify **admin** reporting is a separate pipe that *is* recoverable: with `analytics: { trekkie: true }` a soft navigation is counted as a pageview in admin — **8.5 pageviews per session** against a **~1** control run with the bridge off, same click path, on a published OS 2.0 store. Leave it off and admin undercounts by roughly 8×. Neither mitigation restores installed marketing apps.
+  **The line is authored vs. installed, not vendor by vendor.** Pusha publishes prefixed custom events (`pusha:product_viewed`) and those *do* reach the pixel sandbox. A pixel you wrote subscribes to that name and works. An app pixel subscribes to `product_viewed`, receives your event, and ignores it. Every installed app is affected identically — no vendor is a special case, and none is exempt.
+
+  **Checkout is unaffected.** It's its own document load, so `checkout_started` through `checkout_completed` fire normally. With the landing pageview, that means conversion tracking and purchase attribution survive. What's lost is the middle — `product_viewed`, `collection_viewed`, the browse funnel.
+
+  **Admin reporting is separately recoverable.** With `analytics: { trekkie: true }` a soft navigation is counted as a pageview in admin — **8.5 pageviews per session** against a **~1** control with the bridge off, same click path, published OS 2.0 store. Leave it off and admin undercounts by roughly 8×.
 - **Apps go stale or silent.** Pusha has not been built or tested against theme app extensions. App blocks inside the swapped region come back as inert HTML with dead JS; app embeds in the persistent shell survive but hold listeners pointing at replaced nodes; app-injected `<script>` tags initialize once and stay quiet after page one. There is no way to wrap code you don't own, so opt those pages out (`data-no-transition` on links into them, or `pjax: false` globally) until app support lands.
 - **The persistent shell freezes at first render.** Header, footer, and anything outside the container keep the Liquid output of whichever page the buyer landed on. Currency, customer state, localization, and cart context in those regions can drift from the current URL. Pusha syncs the head and the container; it does not re-render the shell. [Islands](#islands-section-rendering-api) exist for exactly this and will revalidate a marked region through the Section Rendering API — but you have to identify the stale-prone regions yourself, and anything you miss stays wrong silently.
 
 None of this depends on undocumented platform internals — Pusha reads standard markup and calls documented APIs, so a Shopify deploy is unlikely to break it overnight. The risk is the inverse: the gaps are quiet. Nothing throws. A store can look perfect while its pixels report nothing and its header shows the wrong currency.
+
+### Who this is safe for
+
+The useful question isn't "does this store use Meta." It's **does anything it depends on need mid-funnel browse events it didn't wire itself?**
+
+| Situation | Cost of the gap |
+|---|---|
+| No paid social | **None.** Those pixels weren't doing anything for you. |
+| Prospecting ads optimizing to purchase | **Near none.** Purchase fires at checkout, which is intact. |
+| **Retargeting or dynamic product ads** | **Real.** Audiences are built from browse events inside the ad account. Forwarding can't put them there. |
+| **Klaviyo/Mailchimp browse abandonment** | **Real, and easy to miss** — see below. |
+
+⚠ **Browse-abandonment flows are the trap.** Klaviyo's flow triggers on `Viewed Product`, delivered by its app pixel — the exact channel that stops. So the owned-email retargeting you'd reach for *instead of* paid ads silently stops firing past the landing page. It's recoverable (a companion pixel forwarding `pusha:product_viewed` to Klaviyo's track API, or its onsite JS wired to the same event) but it is not automatic and it fails without an error. If a store leans on browse abandonment, wire it deliberately and verify it. Same shape for Mailchimp.
+
+Whatever depends on mid-funnel events has to be something you own end to end. That's workable when you operate and instrument the store yourself. It is not something to hand a merchant running a dozen marketing apps.
 
 So measure before you trust it. On a **published** theme, walk several navigations and confirm what actually arrives in GA4 Realtime, Meta Events Manager, and your app surfaces. A preview or dev environment will not tell you the truth about any of them.
 

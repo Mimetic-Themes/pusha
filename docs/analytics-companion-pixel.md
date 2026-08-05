@@ -90,6 +90,15 @@ and neither substitutes for the other.
 `checkout_started`, `payment_info_submitted`, and `checkout_completed` fire
 natively. The gap is browse events only.
 
+**The line is authored vs. installed.** Not vendor by vendor — no app is a
+special case and none is exempt. A pixel you wrote subscribes to `pusha:*` and
+works; an app pixel subscribes to the standard name, receives your event, and
+ignores it. So the question about a store is whether anything it depends on
+needs mid-funnel browse events it didn't wire itself. Retargeting and dynamic
+product ads do, and forwarding can't help — those audiences are built inside the
+ad account. Browse-abandonment email does too, but that one you *can* wire; see
+below.
+
 If a store runs heavy paid acquisition through many installed marketing apps,
 Pusha is not a good fit today. Say so before you install it.
 
@@ -165,6 +174,51 @@ analytics.subscribe('search_submitted', function (e) { send('search_submitted', 
 
 Consent is handled for you — the sandbox respects the Customer Privacy API, so
 events are withheld when the buyer hasn't consented.
+
+## ⚠ Browse abandonment needs wiring, and fails silently without it
+
+The flow most likely to break unnoticed. Klaviyo's browse-abandonment flow
+triggers on its `Viewed Product` metric, delivered by the Klaviyo app pixel —
+which is exactly the channel that stops after page one. Mailchimp's product-
+retargeting flows have the same shape.
+
+This matters more than it first looks. Owned email is the usual answer to *not*
+depending on paid retargeting — so on a Pusha storefront the fallback and the
+thing it's replacing break through the same pipe. Nothing errors. The flow just
+stops enrolling people, and you find out when someone asks why revenue from it
+went flat.
+
+Forward it yourself from the same subscription block:
+
+```js
+analytics.subscribe('pusha:product_viewed', function (event) {
+  var p = event.data && event.data.productVariant;
+  if (!p) return;
+
+  fetch('https://a.klaviyo.com/client/events/?company_id=' + KLAVIYO_PUBLIC_KEY, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ /* Viewed Product payload — see below */ }),
+  }).catch(function () {});
+});
+```
+
+Two things to get right, and the second is the hard one:
+
+1. **Payload shape.** Check Klaviyo's current Client APIs reference rather than
+   copying a snippet — theirs has changed across versions, and a malformed body
+   fails quietly with a 202.
+2. **★ Identity.** An event with no profile attached enrolls nobody. Klaviyo
+   identifies visitors by its `__kla_id` cookie, which its own JS sets on the
+   storefront. The pixel sandbox exposes `browser.cookie`, so you can read it and
+   attach the profile — but if the visitor has never identified themselves (no
+   email captured yet) there is nothing to enroll, exactly as on a normal store.
+   Test with a known-identified visitor or you'll conclude it's broken when it's
+   working.
+
+Verify by triggering the flow end to end on a published theme with a real
+profile — a `202` from the API only means the request was accepted, not that a
+profile was matched or a flow enrolled.
 
 ## Verifying it
 
