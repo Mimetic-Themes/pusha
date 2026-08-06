@@ -1,5 +1,11 @@
 # Proposal — Bucket X (theme app extension surface) + the app re-init seam
 
+> **▶ To implement this, start from [`bucket-x-brief.md`](./bucket-x-brief.md)** —
+> where the code goes, a real 20-app test corpus with expected outcomes, and the
+> definition of done. This document is the design; that one is the task.
+>
+> Part 2a (Standard-Actions cart bridge) has since **shipped** — see `src/cart.ts`.
+
 Status: **DRAFT** (2026-07-23). Companion to
 `partials-and-remediation-routing.md`. Closes the gap the README names
 explicitly ("No third-party app integration yet"): the audit sees app-injected
