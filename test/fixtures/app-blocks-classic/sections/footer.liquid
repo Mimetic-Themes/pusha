@@ -1,0 +1,24 @@
+<footer class="footer">
+  {%- for block in section.blocks -%}
+    {% render block %}
+  {%- endfor -%}
+</footer>
+
+{% schema %}
+{
+  "name": "Footer",
+  "tag": "footer",
+  "class": "footer",
+  "blocks": [
+    {
+      "type": "@app"
+    },
+    {
+      "type": "text"
+    }
+  ],
+  "enabled_on": {
+    "groups": ["footer"]
+  }
+}
+{% endschema %}

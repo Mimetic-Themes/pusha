@@ -1,0 +1,30 @@
+/*
+ * ------------------------------------------------------------
+ * IMPORTANT: The contents of this file are auto-generated.
+ *
+ * This file may be updated by the Shopify admin theme editor
+ * or related systems. Please exercise caution as any changes
+ * made to this file may be overwritten.
+ * ------------------------------------------------------------
+ */
+{
+  "current": {
+    "blocks": {
+      "1111111111111111111": {
+        "type": "shopify://apps/kilatech-currency-converter/blocks/app-embed/aaaa-1111",
+        "disabled": false,
+        "settings": {}
+      },
+      "2222222222222222222": {
+        "type": "shopify://apps/kutoku/blocks/landing-snippet/bbbb-2222",
+        "disabled": false,
+        "settings": {}
+      },
+      "3333333333333333333": {
+        "type": "shopify://apps/easy-appointment-booking/blocks/select_time/cccc-3333",
+        "disabled": true,
+        "settings": {}
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+<div class="product">
+  <h1>{{ section.settings.heading }}</h1>
+</div>
+
+{% schema %}
+{
+  "name": "Main product",
+  "tag": "section",
+  "class": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading",
+      "default": "Product",
+      "label": "Heading"
+    }
+  ]
+}
+{% endschema %}

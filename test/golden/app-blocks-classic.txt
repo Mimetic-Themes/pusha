@@ -4,9 +4,7 @@ whitelists: on (default — pass --no-whitelist to disable)
 
 ## A. External <script src> — safe
   Safe. External <script src> tags are re-loaded by Pusha's syncHeadScripts on every nav.
-  sections/featured.liquid:2: <script src="{{ 'featured.js' | asset_url }}" defer></script>
-  layout/theme.liquid:18: <script src="{{ 'legacy.js' | asset_url }}" defer></script>
-  templates/gift_card.liquid:2: <script src="{{ 'qr.js' | asset_url }}"></script>
+  (none)
 
 ## B. JSON data <script type="application/(ld+)?json"> — safe
   Safe. JSON data blocks are non-executable.
@@ -14,39 +12,27 @@ whitelists: on (default — pass --no-whitelist to disable)
 
 ## C. Custom elements — safe (verify)
   Safe (verify). Custom elements with disconnectedCallback clean up automatically.
-  assets/hero.js  [has disconnectedCallback]
+  (none)
 
 ## D. Custom elements — needs cleanup
   Needs cleanup. Add disconnectedCallback OR wrap the section so registry.destroy can fire.
-  assets/carousel.js  [extends HTMLElement, no cleanup, external refs]
+  (none)
 
 ## E. Procedural inline <script> — wrap by location
   Procedural inline script that must re-run on each PJAX swap. The correct fix depends on where it lives — see "Fix by location" below.
-  sections/hero.liquid:4: <script>  [section]
-  templates/gift_card.liquid:3: <script>  [template]
-  Fix by location:
-    · section     → sectionInits['<handle>'] = (root) => {…}; scope queries to root.
-    · template    → Move to a custom element, or an onAfterInit((c,meta)=>…) hook keyed on meta.template.
+  (none)
 
 ## F. {% javascript %} blocks — F1 safe, F2 wrap by location
   F1 (custom element class) is already safe. F2 (procedural {% javascript %}) must re-run per swap — fix by location, see below.
-  F2: sections/slideshow.liquid  [section]
-  Fix by location:
-    · section     → sectionInits['<handle>'] = (root) => {…}; scope queries to root.
+  (none)
 
 ## G. DOMContentLoaded handlers — replace by location
   DOMContentLoaded does not re-fire after PJAX swaps. The replacement depends on where the handler lives — see "Fix by location" below.
-  assets/legacy.js:3: document.addEventListener('DOMContentLoaded', function () {  [asset]
-  templates/gift_card.liquid:4: document.addEventListener('DOMContentLoaded', function () {  [template]
-  Fix by location:
-    · template    → Move into a custom element or an onAfterInit hook.
-    · asset       → Global asset — replace DOMContentLoaded with onFirstLoad, or move into a custom element.
+  (none)
 
 ## H. Module-level state — hard, human review
   Human review. Module-level state and IIFEs hold closures that don't replay on swap. Check reachability — dead code can be deleted; live code needs refactor.
-  assets/legacy.js  [top-level window/document mutation] (reachable)  [asset]
-  Fix by location:
-    · asset       → Module-level state in a shared asset — closures do not replay on swap; refactor to instance/registry state.
+  (none)
 
 ## K. Portal-to-body custom elements — add data-pusha-cleanup
   Portal-to-body custom element. Survives PJAX swaps because connectedCallback moves it outside the swap container. Add `data-pusha-cleanup` to every render site so Pusha removes it before each nav.
@@ -59,13 +45,15 @@ whitelists: on (default — pass --no-whitelist to disable)
 
 ## M. Persistent-shell stateful UI — close-on-nav opt-in
   Persistent-shell stateful UI — modals/drawers/overlays that lived outside #MainContent and were authored assuming a full reload would dismiss them. Three remediation options: (1) add `data-pusha-close-on-nav` to the root (Pusha strips `[open]` / sets `aria-expanded="false"` / removes body classes listed in `data-pusha-body-class-on-open`); (2) implement a `closeOnNav()` method on the custom element; (3) call `Pusha.onBeforeLeave(() => this.close())` manually. Cart drawers and persistent widgets simply omit the marker — opt-in is the safe default.
-  Stateful elements in persistent shell (add data-pusha-close-on-nav, or implement closeOnNav()):
-    layout/theme.liquid:11: [M details] <details> in persistent shell
-        <details class="mobile-nav">
+  (none)
 
 ## J. Analytics surface
   Analytics surface. NOTE: Pusha reaches the pixel sandbox only through PREFIXED CUSTOM events — the customEvents bridge publishes pusha:page_viewed plus prefixed copies of the page-type payloads, and those are delivered to custom pixels and app pixels. What is fenced is publishing under STANDARD names, which the storefront API rejects, so a standard page_viewed never arrives on a swap. Delivery is not consumption: a third-party app pixel subscribed to the standard vocabulary has no mapping for a prefixed name, so reviving it still needs a companion custom pixel that forwards the event (docs/analytics-companion-pixel.md, README "Analytics & tracking"). This bucket checks the theme-serialized <script type="application/json" data-pusha-analytics-event> blocks anyway, because they are hand-written Liquid that nothing validates at runtime and keeping their shape right is what makes a supported publish path cheap to adopt later. Four kinds: coverage (a product/collection/search/cart page with no marker), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and would republish one page's payload forever), and raw-pixel (gtag/fbq/dataLayer calls installed directly in the theme — refire them manually from onAfterInit; do NOT migrate them into Customer Events, which would move a working pixel onto the unreachable channel).
-  (none)
+  Gaps — silent data loss or corruption:
+    (theme): [J-coverage] no product_viewed marker — the page exists but nothing re-publishes the event on a swap
+    (theme): [J-coverage] no cart_viewed marker — the page exists but nothing re-publishes the event on a swap
+  A missing or malformed marker never throws — the event simply stops reaching Meta/GA4/TikTok/Klaviyo.
+  Validate on a published theme with live pixels; a preview environment won't show the loss.
 
 ## P. Partials — server-rendered refresh regions (informational)
   Informational — {% partial %} + @shopify/partial-rendering regions (new-Liquid's islands substrate). The inventory maps each partial to its consumers. The partial name is a load-bearing string contract (renaming a declaration breaks every consumer), and Pusha must coordinate its container swap with the theme's partials.apply() so a nav mid-refresh has defined ordering.
@@ -73,29 +61,48 @@ whitelists: on (default — pass --no-whitelist to disable)
 
 ## X. Theme app extensions — app blocks, embeds, and the Script Tag blind spot
   Theme app extensions. Informational + advisory — an app's code cannot be mechanically transformed, so X inventories app surfaces and assigns each a PJAX-safety verdict routed by location. Two reports: X-surface lists every { "type": "@app" } declaration in a {% schema %}, split by container membership — a risk map that stays valid when the merchant installs something tomorrow, and it works with zero apps installed. X-placed recursively walks the blocks tree of every templates/*.json and sections/*.json plus config/settings_data.json -> current.blocks, and reports what is actually installed. Detection parses JSON and reads `type`: a text match misses the escaped `shopify:\/\/apps\/` encoding Shopify writes into some template files, and would report the flagship product template as app-free. Verdicts: at-risk (app block inside the swap container), survives (app block in a section group), survives-verify (app embed — outside the container, but references into the swapped region go stale with no repair signal), opaque (Script Tag API — invisible statically). App embeds with disabled: true are ignored.
-  App wrapper: platform-generated fallback (no sections/apps.liquid or sections/_blocks.liquid)
+  App wrapper: sections/apps.liquid  (theme-owned — top-level app blocks render through it)
   X-surface — where app blocks can land (@app schema declarations; valid with zero apps installed):
-    (none)
+    sections/apps.liquid                [section]    at-risk if used — renders inside the swap container
+    sections/footer.liquid              [shell]    survives — renders in a section group, outside the swap container
   X-placed — apps actually installed:
-    (none)
+    AT-RISK (3 app blocks) — inside the swap container; init JS ran on the old document and does not re-run:
+      judge-me-reviews · review_widget  [section]
+        templates/index.json → section apps_nested_pQrStu (type: apps) → block group_outer → block group_inner → block judge_me_reviews_review_widget_eeee5555
+      kiwi-size-chart-recommender · kiwiSizing  [section]
+        templates/index.json → section apps_XbUNzW (type: apps) → block kiwi_size_chart_recommender_kiwi_sizing_jJEH4d
+        templates/product.json → section 1708627536b63d27c7 (type: apps) → block kiwi_size_chart_recommender_kiwi_sizing_jJEH4d
+      zapiet · pickup-delivery  [section]
+        templates/cart.json → section apps_cart_LmNoPq (type: apps) → block zapiet_pickup_delivery_ffff6666
+    SURVIVES (1 app block) — renders in a section group, outside the swap container; init runs once and keeps running:
+      commslayer · chat  [shell]
+        sections/footer-group.json → section footer_abc (type: footer) → block commslayer_chat_ABC123
+    SURVIVES, VERIFY (2 embeds) — outside the container, so they survive; but JS holding references INTO the swapped region goes stale silently, and no signal exists to repair it:
+      kilatech-currency-converter · app-embed   config/settings_data.json → current.blocks.1111111111111111111
+      kutoku · landing-snippet                  config/settings_data.json → current.blocks.2222222222222222222
+    1 disabled embed not reported.
+  Verdict → posture:
+    · section     → App block inside the swap container — its init JS ran on the old document and does not re-run. Prefer an app block authored as a custom element (re-mounts for free). Otherwise re-init it from onAfterInit, or opt the surrounding nav out with data-no-transition. Editor test: if the block comes back correct after a settings change in the theme editor, it re-inits off shopify:section:load and is recoverable.
+    · shell       → App block in a section group — renders outside the swap container and is never removed, so its init runs once and keeps running. This is the recommended app placement. Verify only that it holds no references into the swapped region.
+    · embed       → App embed — injected before </head> / </body>, outside the swap container, so it survives. But an embed holding references INTO the swapped region goes stale silently, and no signal exists to repair it. Verify by hand on a swapped page.
   Blind spot — Script Tag API: apps can inject <script> at runtime. Those tags are not in any theme file,
   so this audit cannot see them and their absence above is not evidence of absence. They initialize once
   and go silent after page one. Verify in a live session.
 
 ## Summary
-  A external src refs:           3
+  A external src refs:           0
   B JSON / ld+json data blocks:  0
-  C/D custom elements:           2  (safe: 1, cleanup-candidate: 1)
-  E procedural inline scripts:   2
-  F {% javascript %} blocks:     1  (F1 safe: 0, F2 wrap: 1)
-  G DOMContentLoaded handlers:   2
-  H module-level state:          1
+  C/D custom elements:           0  (safe: 0, cleanup-candidate: 0)
+  E procedural inline scripts:   0
+  F {% javascript %} blocks:     0  (F1 safe: 0, F2 wrap: 0)
+  G DOMContentLoaded handlers:   0
+  H module-level state:          0
   K portal-to-body classes:      0  (0 render site(s) need data-pusha-cleanup)
   L Liquid persistent state:     1  (auto: 1, ask: 0, ok: 0)
-  M persistent-shell stateful UI: 1  (modals: 1, body-class lockouts: 0)
-  J analytics surface:           0  (gaps: 0, advisory: 0)
+  M persistent-shell stateful UI: 0  (modals: 0, body-class lockouts: 0)
+  J analytics surface:           2  (gaps: 2, advisory: 0)
   P partials:                    0
-  X theme app extensions:        0  (at-risk: 0, survives: 0, embeds survives-verify: 0; @app sites: 0)
+  X theme app extensions:        6  (at-risk: 3, survives: 1, embeds survives-verify: 2; @app sites: 2)
 
 ## Suppressed by whitelists
   (none — no findings matched a whitelist in this run)

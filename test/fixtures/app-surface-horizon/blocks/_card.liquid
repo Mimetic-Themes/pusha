@@ -1,0 +1,21 @@
+<div class="card">
+  {% content_for 'blocks' %}
+</div>
+
+{% schema %}
+{
+  "name": "Card",
+  "tag": null,
+  "blocks": [
+    {
+      "type": "text"
+    },
+    {
+      "type": "@theme"
+    },
+    {
+      "type": "@app"
+    }
+  ]
+}
+{% endschema %}

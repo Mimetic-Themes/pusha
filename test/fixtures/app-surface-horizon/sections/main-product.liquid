@@ -1,0 +1,21 @@
+<div class="section-wrapper">
+  {% content_for 'blocks' %}
+</div>
+
+{% schema %}
+{
+  "name": "Product information",
+  "class": "section-wrapper",
+  "blocks": [
+    {
+      "type": "@app"
+    },
+    {
+      "type": "_price"
+    }
+  ],
+  "disabled_on": {
+    "groups": ["header", "footer"]
+  }
+}
+{% endschema %}

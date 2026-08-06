@@ -1,0 +1,18 @@
+{
+  "type": "custom",
+  "name": "Shell group",
+  "sections": {
+    "shell_sec": {
+      "type": "shell-section",
+      "blocks": {
+        "widgetco_promo_shellkey": {
+          "type": "shopify://apps/widgetco/blocks/promo/shell-uuid-0001",
+          "settings": {}
+        }
+      },
+      "block_order": ["widgetco_promo_shellkey"],
+      "settings": {}
+    }
+  },
+  "order": ["shell_sec"]
+}

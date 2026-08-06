@@ -1,0 +1,28 @@
+{
+  "sections": {
+    "apps_array_sec": {
+      "type": "apps",
+      "blocks": [
+        {
+          "type": "shopify://apps/widgetco/blocks/promo/array-uuid-0002",
+          "settings": {}
+        }
+      ],
+      "settings": {}
+    },
+    "decoy_sec": {
+      "type": "main-page",
+      "blocks": {
+        "decoy_text": {
+          "type": "text",
+          "settings": {
+            "description": "See shopify://apps/decoy-app/blocks/decoy/should-be-ignored for setup notes."
+          }
+        }
+      },
+      "block_order": ["decoy_text"],
+      "settings": {}
+    }
+  },
+  "order": ["apps_array_sec", "decoy_sec"]
+}

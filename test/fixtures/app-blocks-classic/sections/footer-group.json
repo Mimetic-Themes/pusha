@@ -1,0 +1,18 @@
+{
+  "type": "footer",
+  "name": "Footer",
+  "sections": {
+    "footer_abc": {
+      "type": "footer",
+      "blocks": {
+        "commslayer_chat_ABC123": {
+          "type": "shopify://apps/commslayer/blocks/chat/dddd-4444",
+          "settings": {}
+        }
+      },
+      "block_order": ["commslayer_chat_ABC123"],
+      "settings": {}
+    }
+  },
+  "order": ["footer_abc"]
+}

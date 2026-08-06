@@ -1,0 +1,21 @@
+<header class="section-wrapper">
+  {% content_for 'blocks' %}
+</header>
+
+{% schema %}
+{
+  "name": "Header",
+  "class": "section-wrapper",
+  "blocks": [
+    {
+      "type": "_header-logo"
+    },
+    {
+      "type": "_header-menu"
+    }
+  ],
+  "enabled_on": {
+    "groups": ["header"]
+  }
+}
+{% endschema %}

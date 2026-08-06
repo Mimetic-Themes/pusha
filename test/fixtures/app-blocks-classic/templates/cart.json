@@ -1,0 +1,16 @@
+{
+  "sections": {
+    "apps_cart_LmNoPq": {
+      "type": "apps",
+      "blocks": {
+        "zapiet_pickup_delivery_ffff6666": {
+          "type": "shopify://apps/zapiet/blocks/pickup-delivery/ffff-6666",
+          "settings": {}
+        }
+      },
+      "block_order": ["zapiet_pickup_delivery_ffff6666"],
+      "settings": {}
+    }
+  },
+  "order": ["apps_cart_LmNoPq"]
+}

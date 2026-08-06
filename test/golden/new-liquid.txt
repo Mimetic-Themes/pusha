@@ -57,7 +57,7 @@ whitelists: on (default — pass --no-whitelist to disable)
         <dialog id="cart-drawer" class="drawer">
 
 ## J. Analytics surface
-  Analytics surface. NOTE: Pusha cannot currently reach Web Pixels at all — the storefront publish API is custom events only, so page-type events do not arrive on a swap no matter how correct the markers are (see README "Analytics & tracking"). This bucket checks the theme-serialized <script type="application/json" data-pusha-analytics-event> blocks anyway, because they are hand-written Liquid that nothing validates at runtime and keeping their shape right is what makes a supported publish path cheap to adopt later. Four kinds: coverage (a product/collection/search/cart page with no marker), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and would republish one page's payload forever), and raw-pixel (gtag/fbq/dataLayer calls installed directly in the theme — refire them manually from onAfterInit; do NOT migrate them into Customer Events, which would move a working pixel onto the unreachable channel).
+  Analytics surface. NOTE: Pusha reaches the pixel sandbox only through PREFIXED CUSTOM events — the customEvents bridge publishes pusha:page_viewed plus prefixed copies of the page-type payloads, and those are delivered to custom pixels and app pixels. What is fenced is publishing under STANDARD names, which the storefront API rejects, so a standard page_viewed never arrives on a swap. Delivery is not consumption: a third-party app pixel subscribed to the standard vocabulary has no mapping for a prefixed name, so reviving it still needs a companion custom pixel that forwards the event (docs/analytics-companion-pixel.md, README "Analytics & tracking"). This bucket checks the theme-serialized <script type="application/json" data-pusha-analytics-event> blocks anyway, because they are hand-written Liquid that nothing validates at runtime and keeping their shape right is what makes a supported publish path cheap to adopt later. Four kinds: coverage (a product/collection/search/cart page with no marker), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and would republish one page's payload forever), and raw-pixel (gtag/fbq/dataLayer calls installed directly in the theme — refire them manually from onAfterInit; do NOT migrate them into Customer Events, which would move a working pixel onto the unreachable channel).
   Gaps — silent data loss or corruption:
     (theme): [J-coverage] no product_viewed marker — the page exists but nothing re-publishes the event on a swap
   A missing or malformed marker never throws — the event simply stops reaching Meta/GA4/TikTok/Klaviyo.
@@ -75,6 +75,17 @@ whitelists: on (default — pass --no-whitelist to disable)
   Dual-swap: Pusha's container swap and the theme's partials.apply() both mutate the DOM; a nav
   during an in-flight partial refresh has no defined ordering — coordinate in the runtime.
 
+## X. Theme app extensions — app blocks, embeds, and the Script Tag blind spot
+  Theme app extensions. Informational + advisory — an app's code cannot be mechanically transformed, so X inventories app surfaces and assigns each a PJAX-safety verdict routed by location. Two reports: X-surface lists every { "type": "@app" } declaration in a {% schema %}, split by container membership — a risk map that stays valid when the merchant installs something tomorrow, and it works with zero apps installed. X-placed recursively walks the blocks tree of every templates/*.json and sections/*.json plus config/settings_data.json -> current.blocks, and reports what is actually installed. Detection parses JSON and reads `type`: a text match misses the escaped `shopify:\/\/apps\/` encoding Shopify writes into some template files, and would report the flagship product template as app-free. Verdicts: at-risk (app block inside the swap container), survives (app block in a section group), survives-verify (app embed — outside the container, but references into the swapped region go stale with no repair signal), opaque (Script Tag API — invisible statically). App embeds with disabled: true are ignored.
+  App wrapper: platform-generated fallback (no sections/apps.liquid or sections/_blocks.liquid)
+  X-surface — where app blocks can land (@app schema declarations; valid with zero apps installed):
+    (none)
+  X-placed — apps actually installed:
+    (none)
+  Blind spot — Script Tag API: apps can inject <script> at runtime. Those tags are not in any theme file,
+  so this audit cannot see them and their absence above is not evidence of absence. They initialize once
+  and go silent after page one. Verify in a live session.
+
 ## Summary
   A external src refs:           3
   B JSON / ld+json data blocks:  1
@@ -88,6 +99,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   M persistent-shell stateful UI: 1  (modals: 1, body-class lockouts: 0)
   J analytics surface:           1  (gaps: 1, advisory: 0)
   P partials:                    2  (1 consumed-but-undeclared — likely a naming-contract gap)
+  X theme app extensions:        0  (at-risk: 0, survives: 0, embeds survives-verify: 0; @app sites: 0)
 
 ## Suppressed by whitelists
   (none — no findings matched a whitelist in this run)

@@ -1,0 +1,13 @@
+<div>{% content_for 'blocks' %}</div>
+
+{% schema %}
+{
+  "name": "Only templates key",
+  "blocks": [
+    { "type": "@app" }
+  ],
+  "enabled_on": {
+    "templates": ["index"]
+  }
+}
+{% endschema %}

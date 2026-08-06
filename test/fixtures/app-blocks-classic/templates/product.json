@@ -1,0 +1,31 @@
+/*
+ * ------------------------------------------------------------
+ * IMPORTANT: The contents of this file are auto-generated.
+ *
+ * This file may be updated by the Shopify admin theme editor
+ * or related systems. Please exercise caution as any changes
+ * made to this file may be overwritten.
+ * ------------------------------------------------------------
+ */
+{
+  "sections": {
+    "main": {
+      "type": "main-product",
+      "settings": {
+        "heading": "Product"
+      }
+    },
+    "1708627536b63d27c7": {
+      "type": "apps",
+      "blocks": {
+        "kiwi_size_chart_recommender_kiwi_sizing_jJEH4d": {
+          "type": "shopify:\/\/apps\/kiwi-size-chart-recommender\/blocks\/kiwiSizing\/b7369922",
+          "settings": {}
+        }
+      },
+      "block_order": ["kiwi_size_chart_recommender_kiwi_sizing_jJEH4d"],
+      "settings": {}
+    }
+  },
+  "order": ["main", "1708627536b63d27c7"]
+}

@@ -1,0 +1,18 @@
+<div>{% content_for 'blocks' %}</div>
+
+{% schema %}
+{
+  "name": "Presets only",
+  "blocks": [
+    { "type": "text" }
+  ],
+  "presets": [
+    {
+      "name": "Preset with app",
+      "blocks": [
+        { "type": "@app" }
+      ]
+    }
+  ]
+}
+{% endschema %}

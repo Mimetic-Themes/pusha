@@ -798,12 +798,13 @@ const L_WHITELIST = [
   { re: /\bdata-page-type=/, why: 'inside swap container, re-renders on every nav' },
 ];
 
-// Strip JS-style /* ... */ comments from section-group JSON (Shopify
-// auto-generates them with a leading comment block). Returns null on parse
-// failure.
-function parseSectionGroupJson(text) {
-  const stripped = text.replace(/\/\*[\s\S]*?\*\//g, '').trim();
-  try { return JSON.parse(stripped); } catch { return null; }
+// Parse a theme JSON file. Shopify auto-generates a leading /* ... */ header on
+// settings_data.json, templates/*.json and section groups; strip it only if the
+// text does not already parse, so a /* */ sequence inside a setting value can
+// never be mangled. Returns null on parse failure.
+function parseThemeJson(text) {
+  try { return JSON.parse(text); } catch { /* fall through */ }
+  try { return JSON.parse(text.replace(/\/\*[\s\S]*?\*\//g, '').trim()); } catch { return null; }
 }
 
 // Resolve the set of files that render OUTSIDE #MainContent (the persistent
@@ -820,7 +821,7 @@ function resolvePersistentShellFiles(themePath) {
     for (const entry of readdirSync(sectionsDir)) {
       if (!entry.endsWith('.json')) continue;
       const text = readFileText(join(sectionsDir, entry));
-      const parsed = parseSectionGroupJson(text);
+      const parsed = parseThemeJson(text);
       if (!parsed || !parsed.sections) continue;
       for (const inst of Object.values(parsed.sections)) {
         const type = inst && inst.type;
@@ -1057,7 +1058,7 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
     if (!existsSync(dirs[name])) console.error(`! ${name}/ not found at ${dirs[name]} — skipping`);
   }
 
-  const findings = { A: [], B: [], C: [], D: [], E: [], F: [], G: [], H: [], J: [], K: [], L: [], M: [], P: [], unknown: [] };
+  const findings = { A: [], B: [], C: [], D: [], E: [], F: [], G: [], H: [], J: [], K: [], L: [], M: [], P: [], X: [], unknown: [] };
   // Each entry: { bucket, file, line?, match?, reason? } — the would-have-been
   // finding plus why it was suppressed. `files` keyed by Pusha-self filenames;
   // `G` keyed by the file-level Pusha.on* trigger; `H` keyed by line patterns.
@@ -1249,6 +1250,17 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
   findings.J = analyticsResult.findings;
   const analyticsMarkers = analyticsResult.markers;
 
+  // X — theme app extensions. Needs shellRelSet: the @app capability map
+  // routes a section's location off group membership, same as J's markers.
+  const appResult = detectAppSurfaces(themePath, shellRelSet);
+  findings.X = appResult.findings;
+  const appSurfaces = {
+    capabilities: appResult.capabilities,
+    wrapper: appResult.wrapper,
+    disabledEmbeds: appResult.disabledEmbeds,
+    scriptTagBlindSpot: SCRIPT_TAG_BLIND_SPOT,
+  };
+
   // Annotate — do not downgrade — L findings whose file has partial activity.
   // Scoped to non-'auto' findings: 'auto' state is URL-derivable and re-derived
   // client-side, unrelated to partials; the dynamic state a partial refresh
@@ -1304,10 +1316,15 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
     J: findings.J.length,
     J_gaps: findings.J.filter((x) => x.rank === 'gap').length,
     J_warns: findings.J.filter((x) => x.rank === 'warn').length,
+    X: findings.X.length,
+    X_at_risk: findings.X.filter((x) => x.verdict === 'at-risk').length,
+    X_survives: findings.X.filter((x) => x.verdict === 'survives').length,
+    X_embeds: findings.X.filter((x) => x.kind === 'app-embed').length,
+    X_capabilities: appResult.capabilities.length,
     unknown: findings.unknown.length,
   };
 
-  return { findings, summary, suppressed, analyticsMarkers, whitelistsActive: useWhitelists };
+  return { findings, summary, suppressed, analyticsMarkers, appSurfaces, whitelistsActive: useWhitelists };
 }
 
 // ─── Location routing ───────────────────────────────────────────────────────
@@ -1315,7 +1332,7 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
 // blanket "wrap in sectionInits". locationClass derives that from the path plus
 // the persistent-shell set (files rendered outside #MainContent).
 
-const LOCATION_ORDER = ['section', 'block', 'template', 'shell', 'head-config', 'include', 'asset'];
+const LOCATION_ORDER = ['section', 'block', 'template', 'shell', 'head-config', 'include', 'asset', 'embed', 'script'];
 
 function locationClass(relPath, shellRelSet) {
   if (relPath.startsWith('layout/')) return 'shell';
@@ -1386,6 +1403,13 @@ const REMEDIATION = {
 };
 REMEDIATION.F = REMEDIATION.E; // F2 is a procedural {% javascript %} body — same routing as E.
 
+REMEDIATION.X = {
+  section: 'App block inside the swap container — its init JS ran on the old document and does not re-run. Prefer an app block authored as a custom element (re-mounts for free). Otherwise re-init it from onAfterInit, or opt the surrounding nav out with data-no-transition. Editor test: if the block comes back correct after a settings change in the theme editor, it re-inits off shopify:section:load and is recoverable.',
+  shell: 'App block in a section group — renders outside the swap container and is never removed, so its init runs once and keeps running. This is the recommended app placement. Verify only that it holds no references into the swapped region.',
+  embed: 'App embed — injected before </head> / </body>, outside the swap container, so it survives. But an embed holding references INTO the swapped region goes stale silently, and no signal exists to repair it. Verify by hand on a swapped page.',
+  script: 'Script Tag API — runtime-injected, not in theme files, invisible to a static audit. It initializes once and is silent after page one. Verify in a live session (or with Shopify API context, if present); a static report can only name this as a blind spot.',
+};
+
 // ─── Bucket P: partials ─────────────────────────────────────────────────────
 // {% partial 'name' %} + @shopify/partial-rendering — new-Liquid's named,
 // server-rendered, client-refreshed regions (the islands substrate). The audit
@@ -1438,8 +1462,10 @@ function detectPartials(themePath) {
 // ─── Bucket J: analytics surface ────────────────────────────────────────────
 // The runtime reads page-type payloads from theme-serialized
 // <script data-pusha-analytics-event> blocks and passes them to
-// Shopify.analytics.publish. ⚠ Those publish calls are REJECTED by the platform
-// — the storefront API is custom events only, so no pixel receives them:
+// Shopify.analytics.publish. ⚠ Publishing under a STANDARD name is rejected by
+// the platform. The prefixed custom-event copies the customEvents bridge emits
+// do reach the pixel sandbox, but no third-party app pixel maps a prefixed
+// name — a companion custom pixel has to forward it:
 // https://shopify.dev/docs/api/web-pixels-api/emitting-data
 //
 // This bucket still earns its place: the payloads are hand-written Liquid that
@@ -1588,6 +1614,184 @@ function detectAnalyticsSurface(themePath, shellRelSet) {
   return { findings, markers };
 }
 
+// ─── Bucket X: theme app extensions ─────────────────────────────────────────
+// Two reports. X-surface: every `{ "type": "@app" }` declaration in a
+// {% schema %}, split by container membership — valid with zero apps
+// installed, and the half that never expires. X-placed: the recursive walk of
+// every blocks tree in templates/*.json and sections/*.json, plus
+// config/settings_data.json -> current.blocks for app embeds — what is
+// actually installed, right now.
+//
+// shopify://apps/{app-handle}/blocks/{block-handle}/{extension-uuid}
+// JSON.parse decodes the escaped `shopify:\/\/apps\/` encoding transparently, so
+// this only ever sees plain slashes. NEVER text-match a file for this prefix.
+const APP_TYPE_RE = /^shopify:\/\/apps\/([^/]+)\/blocks\/([^/]+)(?:\/([^/]+))?/;
+
+function parseAppBlockType(type) {
+  if (typeof type !== 'string' || !type) return null;
+  const m = APP_TYPE_RE.exec(type);
+  if (!m) return null;
+  return { appHandle: m[1], blockHandle: m[2], uuid: m[3] ?? null };
+}
+
+// Walk a `blocks` container (object map or array) and every nested `blocks`
+// under it. No depth limit — Horizon templates reach depth 3 with zero apps
+// installed, and a flat walk returns nothing there while looking healthy.
+// `trail` accumulates the block-key address; `onApp(app, trailCopy)` fires per
+// app node, with `trailCopy` holding every key from the top of this tree down
+// to (and including) the app node itself.
+function walkBlockTree(blocks, trail, onApp) {
+  if (!blocks || typeof blocks !== 'object') return;
+  const entries = Array.isArray(blocks)
+    ? blocks.map((node, i) => [String(i), node])
+    : Object.entries(blocks);
+  for (const [key, node] of entries) {
+    if (!node || typeof node !== 'object') continue;
+    const nextTrail = trail.concat(key);
+    const app = parseAppBlockType(node.type);
+    if (app) onApp(app, nextTrail);
+    if (node.blocks) walkBlockTree(node.blocks, nextTrail, onApp);
+  }
+}
+
+const SCHEMA_RE = /\{%-?\s*schema\s*-?%\}([\s\S]*?)\{%-?\s*endschema\s*-?%\}/;
+
+const SCRIPT_TAG_BLIND_SPOT = {
+  location: 'script',
+  verdict: 'opaque',
+  what: 'Script Tag API — runtime-injected, invisible to a static audit.',
+};
+
+function detectAppSurfaces(themePath, shellRelSet) {
+  // kind -> `${appHandle}/${blockHandle}` -> { appHandle, blockHandle, placements }
+  const placementsByKind = { 'app-block': new Map(), 'app-embed': new Map() };
+  let disabledEmbeds = 0;
+
+  const addPlacement = (kind, app, location, address) => {
+    const key = `${app.appHandle}/${app.blockHandle}`;
+    const byKey = placementsByKind[kind];
+    if (!byKey.has(key)) byKey.set(key, { appHandle: app.appHandle, blockHandle: app.blockHandle, placements: [] });
+    byKey.get(key).placements.push({ file: address.file, address: address.text, location });
+  };
+
+  // Location: the file the placement lives in decides, not the host section's
+  // type — a section type used both in a group and a template is in
+  // shellRelSet, which would wrongly mark the template placement as surviving.
+  const walkPlacementFile = (parsed, rel, location) => {
+    if (!parsed || typeof parsed.sections !== 'object' || parsed.sections === null || Array.isArray(parsed.sections)) return;
+    for (const [sectionId, instance] of Object.entries(parsed.sections)) {
+      if (!instance || typeof instance !== 'object') continue;
+      walkBlockTree(instance.blocks, [], (app, trail) => {
+        const blockPath = trail.map((k) => `block ${k}`).join(' → ');
+        const text = `${rel} → section ${sectionId} (type: ${instance.type}) → ${blockPath}`;
+        addPlacement('app-block', app, location, { file: rel, text });
+      });
+    }
+  };
+
+  // X-placed — app blocks. templates/*.json (walkFiles recurses, so
+  // templates/customers/*.json is covered) → 'section'.
+  for (const file of walkFiles(join(themePath, 'templates'), ['.json'])) {
+    const rel = relative(themePath, file);
+    walkPlacementFile(parseThemeJson(readFileText(file)), rel, 'section');
+  }
+
+  // Every .json directly under sections/ (section groups) → 'shell'.
+  const sectionsDir = join(themePath, 'sections');
+  if (existsSync(sectionsDir)) {
+    for (const entry of readdirSync(sectionsDir)) {
+      if (!entry.endsWith('.json')) continue;
+      const file = join(sectionsDir, entry);
+      const rel = relative(themePath, file);
+      walkPlacementFile(parseThemeJson(readFileText(file)), rel, 'shell');
+    }
+  }
+
+  // X-placed — app embeds. config/settings_data.json -> current.blocks,
+  // filtered to disabled !== true. `current` may be a string (unconfigured
+  // theme storing a preset name) — guard the type before reading .blocks.
+  const settingsText = readFileText(join(themePath, 'config/settings_data.json'));
+  const settingsParsed = parseThemeJson(settingsText);
+  const current = settingsParsed && settingsParsed.current;
+  const currentBlocks = current && typeof current === 'object' && !Array.isArray(current) ? current.blocks : null;
+  if (currentBlocks && typeof currentBlocks === 'object' && !Array.isArray(currentBlocks)) {
+    for (const [key, entry] of Object.entries(currentBlocks)) {
+      if (!entry || typeof entry !== 'object') continue;
+      const app = parseAppBlockType(entry.type);
+      if (!app) continue;
+      if (entry.disabled === true) { disabledEmbeds++; continue; }
+      const text = `config/settings_data.json → current.blocks.${key}`;
+      addPlacement('app-embed', app, 'embed', { file: 'config/settings_data.json', text });
+    }
+  }
+
+  // Dedupe is already done by keying placementsByKind above. Finalize each
+  // finding's verdict as the worst-case location among its placements.
+  const findings = [];
+  for (const [kind, byKey] of Object.entries(placementsByKind)) {
+    for (const { appHandle, blockHandle, placements } of byKey.values()) {
+      placements.sort((a, b) => a.file.localeCompare(b.file) || a.address.localeCompare(b.address));
+      const location = kind === 'app-embed' ? 'embed' : (placements.some((p) => p.location === 'section') ? 'section' : 'shell');
+      const verdict = location === 'section' ? 'at-risk' : location === 'shell' ? 'survives' : 'survives-verify';
+      findings.push({ kind, appHandle, blockHandle, location, verdict, placements });
+    }
+  }
+  findings.sort((a, b) =>
+    (a.kind === b.kind ? 0 : a.kind === 'app-block' ? -1 : 1)
+    || a.appHandle.localeCompare(b.appHandle)
+    || a.blockHandle.localeCompare(b.blockHandle));
+
+  // X-surface — the @app capability map. For every .liquid under sections/
+  // and blocks/: extract the {% schema %} body, check schema.blocks for an
+  // "@app" entry. Ignore presets.
+  const capabilities = [];
+  const scanCapabilities = (dir) => {
+    for (const file of walkFiles(join(themePath, dir), ['.liquid'])) {
+      const rel = relative(themePath, file);
+      const m = SCHEMA_RE.exec(readFileText(file));
+      if (!m) continue;
+      const schema = parseThemeJson(m[1]);
+      if (!schema || !Array.isArray(schema.blocks)) continue;
+      if (!schema.blocks.some((b) => b && b.type === '@app')) continue;
+
+      // Priority order — first match wins.
+      let location;
+      if (schema.enabled_on && Array.isArray(schema.enabled_on.groups) && schema.enabled_on.groups.length > 0) {
+        location = 'shell'; // renders only in section groups
+      } else if (shellRelSet.has(rel)) {
+        location = 'shell'; // actually referenced by a group JSON
+      } else if (schema.disabled_on && Array.isArray(schema.disabled_on.groups) && schema.disabled_on.groups.length > 0) {
+        location = 'section'; // fenced out of the shell — can only be in the swapped container
+      } else {
+        location = locationClass(rel, shellRelSet); // 'section' for sections/*.liquid, 'block' for blocks/*.liquid
+      }
+
+      const note = location === 'section' ? 'at-risk if used — renders inside the swap container'
+        : location === 'shell' ? 'survives — renders in a section group, outside the swap container'
+        : "depends on host section — a theme block inherits its host's location";
+      capabilities.push({ file: rel, location, note });
+    }
+  };
+  scanCapabilities('sections');
+  scanCapabilities('blocks');
+  capabilities.sort((a, b) => a.file.localeCompare(b.file));
+
+  // Wrapper resolution (three steps, both candidates theme-owned). The
+  // wrapper file normally also declares @app in its own schema, so it appears
+  // both as the wrapper line and as a [section] capability entry — intended,
+  // not a double-count.
+  let wrapper;
+  if (existsSync(join(themePath, 'sections/apps.liquid'))) {
+    wrapper = { kind: 'apps.liquid', file: 'sections/apps.liquid' };
+  } else if (existsSync(join(themePath, 'sections/_blocks.liquid'))) {
+    wrapper = { kind: '_blocks.liquid', file: 'sections/_blocks.liquid' };
+  } else {
+    wrapper = { kind: 'platform-fallback', file: null };
+  }
+
+  return { findings, capabilities, wrapper, disabledEmbeds };
+}
+
 const BUCKET_RULES = {
   A: 'Safe. External <script src> tags are re-loaded by Pusha\'s syncHeadScripts on every nav.',
   B: 'Safe. JSON data blocks are non-executable.',
@@ -1600,11 +1804,12 @@ const BUCKET_RULES = {
   K: 'Portal-to-body custom element. Survives PJAX swaps because connectedCallback moves it outside the swap container. Add `data-pusha-cleanup` to every render site so Pusha removes it before each nav.',
   L: 'Per-request Liquid in the layout shell (layout/theme.liquid, section groups, transitively-rendered snippets) freezes on first load. Sub-letters mirror the request-scoped taxonomy: A=URL/template, B=customer, C=cart, D=locale, E=per-page object, F=personalization, G=time, H=app-injected. Rank: auto=URL-derivable in JS, ask=user decides (full-reload boundary or section refetch), ok=already handled by Pusha or theme convention.',
   M: 'Persistent-shell stateful UI — modals/drawers/overlays that lived outside #MainContent and were authored assuming a full reload would dismiss them. Three remediation options: (1) add `data-pusha-close-on-nav` to the root (Pusha strips `[open]` / sets `aria-expanded="false"` / removes body classes listed in `data-pusha-body-class-on-open`); (2) implement a `closeOnNav()` method on the custom element; (3) call `Pusha.onBeforeLeave(() => this.close())` manually. Cart drawers and persistent widgets simply omit the marker — opt-in is the safe default.',
-  J: 'Analytics surface. NOTE: Pusha cannot currently reach Web Pixels at all — the storefront publish API is custom events only, so page-type events do not arrive on a swap no matter how correct the markers are (see README "Analytics & tracking"). This bucket checks the theme-serialized <script type="application/json" data-pusha-analytics-event> blocks anyway, because they are hand-written Liquid that nothing validates at runtime and keeping their shape right is what makes a supported publish path cheap to adopt later. Four kinds: coverage (a product/collection/search/cart page with no marker), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and would republish one page\'s payload forever), and raw-pixel (gtag/fbq/dataLayer calls installed directly in the theme — refire them manually from onAfterInit; do NOT migrate them into Customer Events, which would move a working pixel onto the unreachable channel).',
+  J: 'Analytics surface. NOTE: Pusha reaches the pixel sandbox only through PREFIXED CUSTOM events — the customEvents bridge publishes pusha:page_viewed plus prefixed copies of the page-type payloads, and those are delivered to custom pixels and app pixels. What is fenced is publishing under STANDARD names, which the storefront API rejects, so a standard page_viewed never arrives on a swap. Delivery is not consumption: a third-party app pixel subscribed to the standard vocabulary has no mapping for a prefixed name, so reviving it still needs a companion custom pixel that forwards the event (docs/analytics-companion-pixel.md, README "Analytics & tracking"). This bucket checks the theme-serialized <script type="application/json" data-pusha-analytics-event> blocks anyway, because they are hand-written Liquid that nothing validates at runtime and keeping their shape right is what makes a supported publish path cheap to adopt later. Four kinds: coverage (a product/collection/search/cart page with no marker), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and would republish one page\'s payload forever), and raw-pixel (gtag/fbq/dataLayer calls installed directly in the theme — refire them manually from onAfterInit; do NOT migrate them into Customer Events, which would move a working pixel onto the unreachable channel).',
   P: 'Informational — {% partial %} + @shopify/partial-rendering regions (new-Liquid\'s islands substrate). The inventory maps each partial to its consumers. The partial name is a load-bearing string contract (renaming a declaration breaks every consumer), and Pusha must coordinate its container swap with the theme\'s partials.apply() so a nav mid-refresh has defined ordering.',
+  X: 'Theme app extensions. Informational + advisory — an app\'s code cannot be mechanically transformed, so X inventories app surfaces and assigns each a PJAX-safety verdict routed by location. Two reports: X-surface lists every { "type": "@app" } declaration in a {% schema %}, split by container membership — a risk map that stays valid when the merchant installs something tomorrow, and it works with zero apps installed. X-placed recursively walks the blocks tree of every templates/*.json and sections/*.json plus config/settings_data.json -> current.blocks, and reports what is actually installed. Detection parses JSON and reads `type`: a text match misses the escaped `shopify:\\/\\/apps\\/` encoding Shopify writes into some template files, and would report the flagship product template as app-free. Verdicts: at-risk (app block inside the swap container), survives (app block in a section group), survives-verify (app embed — outside the container, but references into the swapped region go stale with no repair signal), opaque (Script Tag API — invisible statically). App embeds with disabled: true are ignored.',
 };
 
-function printAuditText(themePath, { findings, summary, suppressed, analyticsMarkers, skillFreshness, whitelistsActive }) {
+function printAuditText(themePath, { findings, summary, suppressed, analyticsMarkers, appSurfaces, skillFreshness, whitelistsActive }) {
   const NL = '\n';
   let out = '';
   out += `# pusha audit${NL}`;
@@ -1787,6 +1992,70 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
     out += `  during an in-flight partial refresh has no defined ordering — coordinate in the runtime.${NL}${NL}`;
   }
 
+  // X — theme app extensions. Grouped by verdict, never a flat list: a reader
+  // must never mistake a surviving embed for a breakage. Never entirely
+  // "(none)" — the blind-spot footer always prints, and a suppressed
+  // disabled-embed count is always surfaced, never silent.
+  out += `## X. Theme app extensions — app blocks, embeds, and the Script Tag blind spot${NL}`;
+  out += `  ${BUCKET_RULES.X}${NL}`;
+  const wrapper = appSurfaces.wrapper;
+  const wrapperLine = wrapper.kind === 'platform-fallback'
+    ? 'platform-generated fallback (no sections/apps.liquid or sections/_blocks.liquid)'
+    : `${wrapper.file}  (theme-owned — top-level app blocks render through it)`;
+  out += `  App wrapper: ${wrapperLine}${NL}`;
+
+  out += `  X-surface — where app blocks can land (@app schema declarations; valid with zero apps installed):${NL}`;
+  if (appSurfaces.capabilities.length === 0) {
+    out += `    (none)${NL}`;
+  } else {
+    for (const c of appSurfaces.capabilities) out += `    ${c.file.padEnd(36)}[${c.location}]    ${c.note}${NL}`;
+  }
+
+  out += `  X-placed — apps actually installed:${NL}`;
+  const xAtRisk = findings.X.filter((f) => f.verdict === 'at-risk');
+  const xSurvives = findings.X.filter((f) => f.verdict === 'survives');
+  const xSurvivesVerify = findings.X.filter((f) => f.verdict === 'survives-verify');
+  const xPlural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+  if (xAtRisk.length === 0 && xSurvives.length === 0 && xSurvivesVerify.length === 0) {
+    out += `    (none)${NL}`;
+  } else {
+    const printAppBlockGroup = (label, items, note) => {
+      if (!items.length) return;
+      out += `    ${label} (${xPlural(items.length, 'app block', 'app blocks')}) — ${note}${NL}`;
+      for (const f of items) {
+        out += `      ${f.appHandle} · ${f.blockHandle}  [${f.location}]${NL}`;
+        for (const p of f.placements) {
+          const tag = p.location === f.location ? '' : `  [${p.location} — this placement survives]`;
+          out += `        ${p.address}${tag}${NL}`;
+        }
+      }
+    };
+    printAppBlockGroup('AT-RISK', xAtRisk, 'inside the swap container; init JS ran on the old document and does not re-run:');
+    printAppBlockGroup('SURVIVES', xSurvives, 'renders in a section group, outside the swap container; init runs once and keeps running:');
+    if (xSurvivesVerify.length) {
+      out += `    SURVIVES, VERIFY (${xPlural(xSurvivesVerify.length, 'embed', 'embeds')}) — outside the container, so they survive; but JS holding references INTO the swapped region goes stale silently, and no signal exists to repair it:${NL}`;
+      for (const f of xSurvivesVerify) {
+        const p = f.placements[0];
+        out += `      ${`${f.appHandle} · ${f.blockHandle}`.padEnd(42)}${p.address}${NL}`;
+      }
+    }
+  }
+  if (appSurfaces.disabledEmbeds > 0) {
+    out += `    ${xPlural(appSurfaces.disabledEmbeds, 'disabled embed', 'disabled embeds')} not reported.${NL}`;
+  }
+
+  const xLocsPresent = new Set(findings.X.map((f) => f.location));
+  const xLocsOrder = LOCATION_ORDER.filter((l) => xLocsPresent.has(l) && REMEDIATION.X[l]);
+  if (xLocsOrder.length) {
+    out += `  Verdict → posture:${NL}`;
+    for (const loc of xLocsOrder) out += `    · ${loc.padEnd(12)}→ ${REMEDIATION.X[loc]}${NL}`;
+  }
+
+  out += `  Blind spot — Script Tag API: apps can inject <script> at runtime. Those tags are not in any theme file,${NL}`;
+  out += `  so this audit cannot see them and their absence above is not evidence of absence. They initialize once${NL}`;
+  out += `  and go silent after page one. Verify in a live session.${NL}${NL}`;
+
   out += `## Summary${NL}`;
   out += `  A external src refs:           ${summary.A}${NL}`;
   out += `  B JSON / ld+json data blocks:  ${summary.B}${NL}`;
@@ -1800,6 +2069,7 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
   out += `  M persistent-shell stateful UI: ${summary.M}  (modals: ${summary.M_modals}, body-class lockouts: ${summary.M_body_classes})${NL}`;
   out += `  J analytics surface:           ${summary.J}  (gaps: ${summary.J_gaps}, advisory: ${summary.J_warns})${NL}`;
   out += `  P partials:                    ${summary.P}${summary.P_gaps ? `  (${summary.P_gaps} consumed-but-undeclared — likely a naming-contract gap)` : ''}${NL}`;
+  out += `${'  X theme app extensions:'.padEnd(33)}${summary.X}  (at-risk: ${summary.X_at_risk}, survives: ${summary.X_survives}, embeds survives-verify: ${summary.X_embeds}; @app sites: ${summary.X_capabilities})${NL}`;
   if (summary.unknown) out += `  ? unknown shape:               ${summary.unknown}${NL}`;
   out += NL;
 
@@ -1943,6 +2213,7 @@ async function runAudit(args) {
       summary: result.summary,
       suppressed: result.suppressed,
       analyticsMarkers: result.analyticsMarkers,
+      appSurfaces: result.appSurfaces,
       skillFreshness: result.skillFreshness,
       bucketRules: BUCKET_RULES,
       remediationByLocation: REMEDIATION,

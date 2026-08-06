@@ -1,0 +1,26 @@
+<div class="section-wrapper">
+  {% content_for 'blocks' %}
+</div>
+
+{% schema %}
+{
+  "name": "Section",
+  "class": "section-wrapper",
+  "blocks": [
+    {
+      "type": "@theme"
+    },
+    {
+      "type": "@app"
+    },
+    {
+      "type": "_divider"
+    }
+  ],
+  "presets": [
+    {
+      "name": "Custom section"
+    }
+  ]
+}
+{% endschema %}

@@ -1,0 +1,21 @@
+<footer class="section-wrapper">
+  {% content_for 'blocks' %}
+</footer>
+
+{% schema %}
+{
+  "name": "Footer",
+  "class": "section-wrapper",
+  "blocks": [
+    {
+      "type": "@app"
+    },
+    {
+      "type": "text"
+    }
+  ],
+  "enabled_on": {
+    "groups": ["footer"]
+  }
+}
+{% endschema %}
