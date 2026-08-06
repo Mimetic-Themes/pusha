@@ -38,12 +38,27 @@ contract level — for us and for anyone building on the new declarative storefr
 
 ## The other four
 
-2. **An idempotent re-init contract for theme app extensions.** Document (ideally
-   require) that app blocks initialize from a lifecycle signal —
-   `connectedCallback` or the navigation event above — not a one-shot
-   `DOMContentLoaded`. The blocks-as-custom-elements direction already does this;
-   making it the *contract* for TAE is what lets a re-rendered block come back to
-   life instead of returning as inert HTML.
+2. **Emit `shopify:section:load` whenever section HTML is replaced — not only on
+   theme-editor edits.** The contract already exists and is documented. The
+   editor's own guidance describes exactly the soft-navigation problem
+   ("their HTML is dynamically added, removed, or re-rendered directly onto the
+   existing DOM, without reloading the entire page. However, any associated
+   JavaScript that runs when the page loads won't run again") and answers it with
+   `shopify:section:load` / `shopify:section:unload`, with `detail.sectionId` and
+   a documented expected action: *re-execute any JavaScript needed for the
+   section to work, as if the page had just been loaded.*
+
+   The event, its payload, and its semantics are all specified. Only the
+   **trigger** is scoped too narrowly. Today at least three mechanisms Shopify
+   itself owns replace section HTML without firing it: the Section Rendering API,
+   `partials.apply()`, and the theme editor's own path is the only one that does.
+   Widening the trigger — and stating that app blocks should register the
+   listener unconditionally rather than gating on `Shopify.designMode` — would
+   let a re-rendered block come back to life anywhere, instead of returning as
+   inert HTML the moment anything but the editor swaps it.
+
+   This is the same shape as ask #1: the vocabulary is built, the verb is
+   missing. Both are one branch, not one design.
 
 3. **A coordination seam for `partials.apply()` vs. third-party DOM swaps.**
    `{% partial %}` + `partials.fetch/apply` and a container-level runtime both
@@ -71,8 +86,9 @@ contract level — for us and for anyone building on the new declarative storefr
 Every ask comes from a working runtime that already implements the workarounds:
 Pusha ships an analytics bridge that re-fires page-view + page-type events on
 every swap, a `cart:mutated` contract, a persistent-shell close-on-nav model, and
-an audit that classifies every theme script by how it behaves under a swap
-(including a bucket for the exact app surfaces above). The asks are the handful of
+an audit that classifies every theme script by how it behaves under a swap — with
+a designed bucket for the app surfaces above, whose remediation column is exactly
+what ask #2 would let us stop hand-writing. The asks are the handful of
 primitives that only Shopify can provide — the ones that would let us *delete*
 those workarounds and let apps, themes, agents, and runtimes share one contract.
 
