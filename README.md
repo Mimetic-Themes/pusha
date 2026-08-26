@@ -701,7 +701,7 @@ every raw finding. Pass a path to audit a different directory.
 `--claude` / `--cursor` / `--aider` to install the skill for that agent. Add
 `--global` to install into `~/` instead of the project.
 
-The audit classifies every script in the theme by transformation difficulty (buckets A–H), plus the buckets that cover a whole surface rather than a single script: J (analytics — coverage, payload conformance, placement, and raw pixels that bypass Customer Events), K (portal-to-body custom elements needing `data-pusha-cleanup`), L (per-request Liquid frozen in the shell), M (persistent-shell stateful UI), and P (`{% partial %}` regions). The `pusha` skill consumes this output to apply the wrappers; agents without the skill can act on the audit's prescriptive "Next steps" block directly.
+The audit classifies every script in the theme by transformation difficulty (buckets A–H), plus the buckets that cover a whole surface rather than a single script: J (analytics — coverage, payload conformance, placement, and raw pixels that bypass Customer Events), K (portal-to-body custom elements needing `data-pusha-cleanup`), L (per-request Liquid frozen in the shell), M (persistent-shell stateful UI), P (`{% partial %}` regions), and X (theme app extensions — which installed app blocks and embeds sit inside the swap container, and which survive it). The `pusha` skill consumes this output to apply the wrappers; agents without the skill can act on the audit's prescriptive "Next steps" block directly.
 
 A `create-pusha` scaffolder for new themes is on the roadmap, once Pusha is
 published.
@@ -781,8 +781,10 @@ documentation. Not shipped in the npm package (`files` excludes both).
 - [`docs/platform-asks-shopify.md`](docs/platform-asks-shopify.md) — five asks
   to Shopify for the new-Liquid / Standard Events preview. The first: a
   soft-navigation lifecycle event.
-- [`docs/proposals/`](docs/proposals/) — audit design RFCs. Bucket P (partials)
-  is implemented; bucket X (theme app extension surface) is a draft.
+- [`docs/proposals/`](docs/proposals/) — audit design RFCs. Buckets P (partials)
+  and X (theme app extension surface) are both implemented; X's runtime half —
+  re-dispatching the section lifecycle on swap — is not, and is gated on
+  [`experiments/editor-reinit-pretest.md`](experiments/editor-reinit-pretest.md).
 
 ---
 
