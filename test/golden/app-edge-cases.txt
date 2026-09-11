@@ -134,7 +134,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   SKILL.md    — end-to-end porter procedure (audit → delegate → diff → review)
 
   After `npm install github:mimetic-themes/pusha`:
-    node_modules/@mimetic/pusha/skill/{SKILL.md, PATTERNS.md}
+    node_modules/@mimeticthemes/pusha/skill/{SKILL.md, PATTERNS.md}
 
   Or via this CLI:
     pusha audit --full                  (append PATTERNS.md to this report)

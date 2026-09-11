@@ -59,7 +59,7 @@ jobs:
           node -e "
             const subpaths = ['', '/registry', '/hooks', '/transitions',
                               '/prefetch', '/islands', '/active-links', '/diagnostics'];
-            Promise.all(subpaths.map(s => import('@mimetic/pusha' + s)))
+            Promise.all(subpaths.map(s => import('@mimeticthemes/pusha' + s)))
               .then(([main]) => {
                 if (typeof main.initRuntime !== 'function') {
                   throw new Error('initRuntime missing from main entry');

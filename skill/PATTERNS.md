@@ -527,7 +527,7 @@ Bucket L doesn't have one mechanical transformation like buckets E/F/G. The acti
 Use Pusha's built-in `initActiveLinks` instead of hand-rolling the loop. It already wires `onAfterSwap`, syncs the body `template-*` class, and walks any `[data-pusha-active-links]` container to toggle per-link state — both with sensible defaults AND with per-element overrides for themes whose CSS already uses theme-specific active-state class names.
 
 ```js
-import { initActiveLinks } from '@mimetic/pusha/active-links';
+import { initActiveLinks } from '@mimeticthemes/pusha/active-links';
 initActiveLinks();
 ```
 
@@ -683,7 +683,7 @@ When the marker is present **and** the element defines `closeOnNav()`, Pusha cal
 Always available; no Pusha feature required:
 
 ```js
-import { onBeforeLeave } from '@mimetic/pusha/hooks';
+import { onBeforeLeave } from '@mimeticthemes/pusha/hooks';
 onBeforeLeave(() => myModal.close());
 ```
 

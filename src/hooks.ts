@@ -1,4 +1,4 @@
-// Lifecycle hooks. Imported from `@mimetic/pusha/hooks` or accessed via the
+// Lifecycle hooks. Imported from `@mimeticthemes/pusha/hooks` or accessed via the
 // global `Pusha` object. Each register fn returns an unregister fn.
 //
 // Async handlers are awaited — returning a Promise blocks the lifecycle stage

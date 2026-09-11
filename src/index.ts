@@ -1,4 +1,4 @@
-// @mimetic/pusha — main entry.
+// @mimeticthemes/pusha — main entry.
 //
 // Themes with a build pipeline (Path B) typically just import { initRuntime }
 // and call it once at bootstrap. The UMD bundle (Path A) auto-boots — see
