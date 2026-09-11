@@ -1,8 +1,24 @@
 # Editor re-init pre-test — what fraction of an app stack survives a re-render?
 
-**Status:** not run. This is the protocol and the recording sheet. Fill in the
-tables, then read [Decision](#decision) — the number decides how the app re-init
-dispatcher ships, not whether it gets written.
+**Status: SUPERSEDED — the instrument does not work.** Measured 2026-09-11: the
+theme editor performs a **full page reload on any theme app extension change**, app
+blocks and app embeds alike. A reload re-runs everything, so every app reads as
+`recovers` and the measurement carries no information. The inference below is sound;
+the editor simply cannot be used to test it.
+
+Replaced by `~/Work/pusha-probe` — a purpose-built theme app extension whose blocks
+differ by exactly one variable each, measured under real Pusha navigation instead of
+in the editor. That rig also reaches the two residuals called out below as
+unmeasurable here: `Shopify.designMode`-gated listeners, and app embeds.
+
+It also changes what is being measured first. This document chased a **recovery
+rate** across third-party apps. The probe chases the **mechanism**, because if an
+uncooperative re-init path exists, the rate stops being load-bearing — remediation
+would no longer depend on the app cooperating, and the [Decision](#decision) table
+below would be the wrong shape rather than merely unfilled.
+
+The rest of this file is retained for the inference, the verdict vocabulary, and the
+corpus expectations, all of which carry over. **Do not run the procedure.**
 
 Gates: the *default* and the *README claims* for the Bucket X runtime half
 (`docs/proposals/bucket-x-brief.md` → "The runtime half"). Not the code — the

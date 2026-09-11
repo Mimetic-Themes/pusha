@@ -14,7 +14,7 @@ Pusha is the PJAX framework product for Mimetic Themes — the runtime layer tha
 
 **Theme scope**: Pusha targets **Shopify Online Store 2.0 themes**, across both composition styles: sections with section blocks defined inline, and theme blocks as reusable `.liquid` files in `blocks/`. Theme blocks are a platform capability of OS 2.0, not a property of any one theme — Shopify's reference themes differ in how far they lean on them, and a theme can mix both styles. Describe themes by the shape of their code, never by a theme name. The audit walks `sections/`, `snippets/`, `layout/`, `assets/`, **`blocks/`, and `templates/`**, so block scripts and inline `.liquid`-template scripts are covered in either shape, and it never classifies code inside `{% comment %}` / `{% doc %}` spans. Legacy pre-OS-2.0 themes are best-effort.
 
-**New-Liquid developer preview** — `.liquid` templates with inline `{% block %}`, `{% partial %}` / `content_for`, and native web components (see the reference theme at `../base-theme-next`) — is currently a **compatibility test bed, not a first-class porting target**. The audit runs and its coverage is correct there, but the `sectionInits` transform model is largely moot (components self-mount via custom-element lifecycle), and several runtime seams are still open: the analytics channel (`@shopify/standard-events` vs `Shopify.analytics`), the islands substrate (Section Rendering API vs `@shopify/partial-rendering`), container-attribute conventions (`#main-content` + `data-template` on `<main>`), and interaction between Pusha's container swap and the platform's own `partials.apply()`. The strategic question — whether new-Liquid needs Pusha at all vs. native cross-document View Transitions + speculation rules — is being resolved by a native-vs-Pusha experiment on the reference theme, not assumed. See the 2026-07-22 new-Liquid review before treating new-Liquid as supported.
+**New-Liquid developer preview** — `.liquid` templates with inline `{% block %}`, `{% partial %}` / `content_for`, and native web components (the reference theme formerly at `../base-theme-next`; **not on disk as of 2026-09-11** — restore or re-clone it before relying on new-Liquid claims here) — is currently a **compatibility test bed, not a first-class porting target**. The audit runs and its coverage is correct there, but the `sectionInits` transform model is largely moot (components self-mount via custom-element lifecycle), and several runtime seams are still open: the analytics channel (`@shopify/standard-events` vs `Shopify.analytics`), the islands substrate (Section Rendering API vs `@shopify/partial-rendering`), container-attribute conventions (`#main-content` + `data-template` on `<main>`), and interaction between Pusha's container swap and the platform's own `partials.apply()`. The strategic question — whether new-Liquid needs Pusha at all vs. native cross-document View Transitions + speculation rules — is being resolved by a native-vs-Pusha experiment on the reference theme, not assumed. See the 2026-07-22 new-Liquid review before treating new-Liquid as supported.
 
 Planned sibling packages in the `@mimetic` scope (`@mimetic/pusha-experiments`, `@mimetic/pusha-agent-ready`) are described in the README Roadmap → "Future packaging". They are separate packages, not part of this runtime.
 
@@ -425,7 +425,7 @@ function firePageView() {
 
 **The documented path**, unbuilt: publish a namespaced custom event (`pusha:page_viewed`) and ship a custom-pixel template the merchant pastes into admin, which calls `fbq` / `gtag` itself. Reaches custom pixels; does not reach app pixels, which subscribe to standard events and receive a custom event only as unparsed `customData`.
 
-**Unverified and worth resolving:** the `standardEvents` bridge re-dispatches `PageViewEvent` through `@shopify/standard-events` (importmap-resolved; not on public npm). Whether that channel is bridged into Web Pixels by the platform is untested. If yes, it's a supported answer on new-Liquid themes. If no, it's the exact platform ask.
+**RESOLVED 2026-09-11 — and it was the wrong question.** The `standardEvents` bridge was filed here as analytics bridge #4 and judged on whether it reaches Web Pixels. It does not (measured: 7 soft navigations, 0 `page_viewed`, `experiments/native-vs-pusha/standard-events-probe.md`) — and that separation is **by design**, not a gap. `@shopify/standard-events` belongs to [Standard storefront events and actions](https://shopify.dev/docs/api/storefront-events-and-actions), a vocabulary the docs explicitly fence off from analytics: *"Use web pixels for analytics, not events: Standard storefront events fire regardless if buyer has consented to tracking. Use them to react on the page, not to collect behavioral data."* It was never a candidate pixel fix, and the old link here pointed at `web-pixels-api/standard-events` — the wrong API, which is probably how it got filed under analytics. It is now an **app-compatibility** bridge; see "Standard storefront events" below.
 
 **Config opt-out** (rare): `window.theme.config.analytics = false` disables the bridge. Only use this if the merchant explicitly doesn't want Shopify analytics — almost never the right choice.
 
@@ -447,7 +447,32 @@ The theme registers a `pjax:content-swap` listener / `onAfterInit` hook to refir
 
 The skill's audit calls out raw-injected pixel scripts (gtag/fbq/dataLayer/ttq call sites). This shipped as **bucket J (analytics surface)** on 2026-08-01, alongside coverage, conformance, and placement checks for the `data-pusha-analytics-event` markers — see `docs/proposals/analytics-surface-audit.md`.
 
-⚠ **Bucket J's recommendation is wrong as shipped** and needs revisiting alongside the correction above. It offers "Customer Events migration or manual refire" as equivalent options; migration is not an option, because it moves a working raw pixel onto the one channel Pusha cannot reach. Manual refire is the only remedy. The conformance checks on `data-pusha-analytics-event` markers are also validating the shape of payloads that the platform rejects — still worth keeping (the shape should be right if a publish path appears), but the audit must not imply those markers make pixels work.
+✅ **Bucket J's remediation was corrected** (`bin/pusha.js`, `BUCKET_RULES.J`). It no longer offers Customer Events migration as an option: raw pixels get "refire them manually from onAfterInit; do NOT migrate them into Customer Events, which would move a working pixel onto the unreachable channel." The conformance checks on `data-pusha-analytics-event` markers stay — the shape should be right if a publish path ever appears — but the audit no longer implies those markers make pixels work.
+
+### Standard storefront events — the sanctioned app-compatibility channel
+
+Discovered 2026-09-11 and it reframes Bucket X. Shopify publishes a fixed vocabulary of twelve `shopify:*` DOM events at [`api/storefront-events-and-actions`](https://shopify.dev/docs/api/storefront-events-and-actions) — page and product views, collection filtering, cart changes, search — plus **actions** (`openCart`, `updateCart`, `getCart`) apps call without knowing how a storefront renders. Stated purpose: *"Apps used to do this by parsing a storefront's DOM or intercepting `window.fetch`, which meant a separate integration for every storefront. Now one integration covers them all."*
+
+**The theme is the authority on what fires.** This is the load-bearing sentence for a soft-navigating theme: *"Most of these events come from the storefront's own dispatch calls, so the theme decides which ones exist. Don't assume an event you depend on fires on a given store."* `shopify:page:view` is documented as once per page load because "storefronts on the Online Store are multi-page." Under Pusha they are not — so Pusha re-dispatches it per navigation, which is the theme doing exactly what the dispatch guide describes.
+
+This is **not** the `shopify:section:*` situation. Those are theme *editor* events; nothing documents a theme dispatching them on the storefront. The `shopify:` prefix is not reserved — themes are expected to dispatch into it — but only for this vocabulary.
+
+**Two loading paths, both supported and both now implemented.** Module themes map the bare specifier in an importmap; non-module themes ("some Dawn-derived themes") assign the namespace to `window.StandardEvents`. Pusha tries the import first, then the global, and caches only a successful resolution — the global path assigns from an async module script, so it can be absent on an early swap and present later.
+
+**What's unmeasured:** whether installed apps actually listen. Sanctioned is not the same as consumed. That is the primary hypothesis of the probe rig (`~/Work/pusha-probe`, variant J) and it decides how the Bucket X runtime half ships.
+
+**Actions are unexplored.** Themes can override an action's default behavior so a call "updates your UI without reloading the page." Pusha implements none of it. Likely the right seam for the cart contract — see "Cart is theme code".
+
+### App compatibility — experimental flags, all off
+
+`src/app-compat.ts`, config under `appCompat`, nothing on by default. These are candidate repairs for theme app extension code that goes inert across a swap, existing to be **measured, not switched on**:
+
+- **`sectionEvents`** — dispatch `shopify:section:unload` before the swap and `shopify:section:load` after, on every `#shopify-section-*`. One flag governs both halves on purpose: load without unload leaks a listener set per navigation, which is worse than doing nothing. Not a blessed lifecycle — best-effort compatibility, no ordering guarantee beyond unload → remove → insert → load.
+- **`reexecuteExtensionScripts`** — re-execute scripts from `cdn.shopify.com/extensions/` only, carving that one origin out of head-sync's dedupe. The narrow scoping is the whole safety story: the dedupe exists because theme section scripts declare top-level `class`/`const` and re-injection throws. ⚠ Expect double-binding; cannot repair a `type="module"` bundle, which executes once per URL per document.
+
+**Not implemented: SRAPI re-fetch.** Re-fetching a section refreshes Liquid output without re-running an app's bundle, which already loaded into `<head>`. It fixes staleness, not binding — that is islands' job. Whether a SRAPI response even carries the injected `<script async>` is undocumented and devrel could not confirm it; the probe answers it with one `fetch()` rather than a runtime feature.
+
+**Why any of this is needed: app JS is not in the swap container.** The `javascript` schema attribute makes Shopify's renderer inject `<script async>` into the *rendered page's head*, per request, deduped. The app developer writes only `"javascript": "app.js"`. So "re-execute the scripts in the swapped markup" reaches nothing for the canonical case, and head-sync's URL dedupe means navigating *into* a page with an app block works while navigating *between* two such pages does not.
 
 ### Package exports
 
@@ -456,12 +481,40 @@ The skill's audit calls out raw-injected pixel scripts (gtag/fbq/dataLayer/ttq c
 @mimetic/pusha/registry     → component registry (register, setupGlobal/init/destroy primitives)
 @mimetic/pusha/hooks        → onBeforeNav, onBeforeLeave, onAfterSwap, onAfterInit, onFirstLoad
 @mimetic/pusha/transitions  → registerTransition, transition primitives
-@mimetic/pusha/prefetch     → opt-in prefetch plugin (Barba-style — core is small, prefetch is optional). Includes nav-link warmup and critical image warming.
+@mimetic/pusha/prefetch     → prefetch cache, nav-link warmup, critical image warming
 @mimetic/pusha/islands      → Section Rendering API revalidation for stale-prone regions
-@mimetic/pusha/diagnostics  → dev-mode warnings (stripped in production builds)
+@mimetic/pusha/active-links → active-link marking across swaps
+@mimetic/pusha/diagnostics  → dev-mode warnings (gated at runtime by `debug`, not stripped)
 ```
 
-Seven subpaths. Each maps to its own source file. `package.json` `exports` field declares all of them. TypeScript types per entry. Path A's UMD build (`dist/pusha.min.js`) bundles all of them and registers on `window.Pusha`.
+Eight subpaths. Each maps to its own source file, and `package.json` `exports`
+declares all of them with types per entry.
+
+**Gating is at RUNTIME, not build time — the subpaths are import ergonomics, not a
+size story.** `runtime.ts` statically imports prefetch, islands, analytics, cart,
+transitions and active-links, then skips each by config check (`if
+(resolved.prefetchConfig) installPrefetch()`). A Path B consumer importing
+`initRuntime` therefore gets the whole runtime regardless of what the theme uses.
+Earlier text here described prefetch as an "opt-in plugin (Barba-style — core is
+small, prefetch is optional)"; that was intent, never implementation, and it is
+removed rather than restated so nobody designs against it.
+
+**This is a deliberate hold, not an oversight.** Measured 2026-09-11 on a clean
+build: 32.2 kB raw / **10.7 kB gzipped** for the UMD bundle — already under
+`@barba/core` alone (9.9 kB) before Barba adds the plugins needed to match, and
+that is with the analytics bridges, islands and the a11y handling included.
+Tree-shaking would save single-digit kB at best, Path A cannot benefit from it at
+all (one UMD file by construction), and moving optional subsystems behind dynamic
+imports would add a round-trip to the first navigation — the exact latency the
+product sells against.
+
+**The trigger to revisit is a subsystem growing, not a size threshold.**
+`app-compat.ts` is ~0.3 kB gzipped today (measured by unwiring it and rebuilding).
+If the probe forces it into a real subsystem — SRAPI re-fetch, per-app allowlists,
+vendor shims — it becomes dead weight for every theme with no apps inside the
+container, and Bucket X already names which themes those are. That is the moment
+it earns `@mimetic/pusha/app-compat` as a genuinely opt-in subpath, and the moment
+build-time modularity is worth its cost. Not before.
 
 ### Versioning
 
@@ -508,9 +561,13 @@ A merchant-facing Shopify app (Rails backend, theme app extension, App Store dis
 
 ## Open questions still on deck
 
+- **Does any installed app listen for `shopify:page:view`?** ⚠ The only question left on Bucket X, and it is about **adoption, not capability**. The mechanism is now MEASURED end to end (2026-09-11, `~/Work/pusha-probe/pusha-probe/results.md`): across 4 soft navigations, an app block that listens for `shopify:page:view` rebound the fresh node every time with zero double-init and zero configuration, as did one authored as a custom element. Everything without a re-init hook went inert regardless of loading shape — schema-attr, inline, in-markup src and module all failed identically. So the audit's job changed from estimating breakage to printing the fix, and `appCompat` dropped from candidate-default to fallback. What is unproven is whether Judge.me, Zapiet et al. have adopted the vocabulary — variant J is a cooperative extension we wrote.
+- **Do the `appCompat` interventions help or harm?** `sectionEvents` and `reexecuteExtensionScripts` both ship off. Double-init is a veto independent of recovery rate — an app bound twice compounds per navigation, worse than one that is merely dead. Same probe, second phase.
+- **Does a Section Rendering API response carry the head-injected `<script async>`?** Undocumented; devrel could not confirm (2026-09-11). One `fetch()` in the console settles it. If present, intervention 2 has a cheaper cousin worth building.
+- **Bucket X's remediation text is deliberately incomplete.** The false claim was removed (it told readers to use the theme editor as a re-init test, which full-reloads on any TAE change and so reports everything as recoverable). The prescriptive replacement waits for the probe — writing "enable `appCompat.sectionEvents`" before measuring would repeat the mistake that killed the editor pretest.
 - **Bucket H in path C** — merchants can't triage H findings. The app needs deterministic completion (auto-resolve H to "skip + `data-no-transition`" + report). The skill is fine with "defer to human"; the app needs auto-resolution rules. Design these before building C. *Deferred with path C itself.*
 
-(Cart API, versioning, hooks, and subpath exports — all resolved above. See "Runtime contract", "Cart is theme code", "Package exports", "Versioning".)
+(Cart API, versioning, hooks, and subpath exports — all resolved above. See "Runtime contract", "Cart is theme code", "Package exports", "Versioning". Extension-only apps *do* support theme app extensions — confirmed via the CLI 2026-09-11, the docs' compatibility table is incomplete; see `docs/questions-for-shopify-dev.md` Q1.)
 
 ## Until there's code
 

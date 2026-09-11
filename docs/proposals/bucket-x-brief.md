@@ -31,6 +31,13 @@ below, and do the pre-test before writing either half.
 
 ## Part 0 — the editor pre-test, before any code
 
+> **SUPERSEDED 2026-09-11.** The editor performs a full page reload on any theme
+> app extension change, so every app reads as recoverable and the measurement carries
+> no information. Replaced by `~/Work/pusha-probe` — a purpose-built extension measured
+> under real Pusha navigation. The inference below is sound; the instrument was not.
+> Result: [The runtime half](#the-runtime-half).
+
+
 The theme editor re-renders section HTML into a live DOM without a page reload —
 structurally the same event as a PJAX swap. Shopify's guidance for that situation
 (`storefronts/themes/best-practices/editor/integrate-sections-and-blocks.md:14`):
@@ -243,55 +250,79 @@ which is the location routing X needs. Reuse it.
 
 ## The runtime half
 
-Separate from the audit, and gated on Part 0's result.
+**MEASURED 2026-09-11 — and the answer removes most of this section's reason to exist.**
+See `~/Work/pusha-probe/pusha-probe/results.md` for the full run.
 
-**The mechanism.** On each swap: dispatch `shopify:section:unload` on every
-outgoing `#shopify-section-*` element before removal, insert the new markup, then
-dispatch `shopify:section:load` on each incoming one. `detail.sectionId` is the
-**full dynamic section ID** — `template--5678__image_banner`,
-`sections--1234__header` — the same string as in the wrapper's
-`id="shopify-section-[id]"` (`api/ajax/section-rendering.md:116–126`). Derive it
-by stripping the `shopify-section-` prefix off the element id; no JSON-key parsing
-belongs in this path.
+Run 0 was Pusha's shipped default with no flag enabled. Across four soft navigations
+on a real storefront, against a purpose-built extension with one variant per loading
+shape:
 
-**Free classification.** Section-group sections carry a second class on the
-wrapper — `class="shopify-section shopify-section-group-header-group"`
+| Shape | Outcome |
+| --- | --- |
+| listens for `shopify:page:view` | **recovers every nav, zero double-init** |
+| authored as a custom element | **recovers every nav, zero double-init** |
+| schema-attr JS, no hook | inert |
+| inline `<script>` in block markup | inert |
+| in-markup `<script src>` | inert |
+| `type="module"` in markup | inert |
+
+**Two shapes recover with no configuration, and both are documented and supported.**
+Pusha already dispatches `shopify:page:view` (the `standardEvents` bridge in
+`src/analytics.ts`); an app that listens the way
+`api/storefront-events-and-actions/events/listen` tells apps to listen rebinds the
+fresh node every time.
+
+**The loading shape is irrelevant to failure.** Four different mechanisms went inert
+identically, which kills "re-execute the scripts in the swapped markup" as a general
+remedy — for the canonical case the JS isn't in the markup at all, it's a
+`<script async>` the platform injects into `<head>`.
+
+### What this does to the plan
+
+**The recovery-rate framing was wrong.** The decision table below conditioned how the
+dispatcher ships on what fraction of installed apps recover. That question mattered
+only while every remedy required the app to cooperate in some *undocumented* way. A
+documented path exists and works, so the audit's job changes from "estimate the
+breakage" to "print the fix": **listen for `shopify:page:view`, or author the block as
+a custom element.** Both are instructions an app developer can act on with Shopify's
+own docs behind them. `bin/pusha.js` → `REMEDIATION.X.section` now says exactly that.
+
+**The `shopify:section:*` dispatcher drops to a fallback.** It ships as
+`appCompat.sectionEvents`, defaulted off, for apps that ignore the standard
+vocabulary. It remains an undocumented use of theme-editor events; nothing in run 0
+changed that. Variants A, G and I were inert here **by construction** — they listen
+for `section:load` and nothing dispatched it — so intervention run 1 measures them,
+not run 0.
+
+**The one open question is adoption, not capability.** Variant J is a cooperative
+extension we wrote. The mechanism is proven end to end — dispatch, receipt, rebind,
+no double-fire — but whether Judge.me or Zapiet have adopted the vocabulary is
+unmeasured, and it is a different kind of question.
+
+### Still to measure
+
+- Run 1 `appCompat.sectionEvents` — do A, G, I recover? Sizes the fallback.
+- Run 2 `appCompat.reexecuteExtensionScripts` — does B recover, and does it double-init
+  A, D, E, J? Double-init is a veto independent of recovery.
+- Probe H's captured reference — the embed stale-reference failure, unmeasurable in the
+  theme editor.
+- Whether a Section Rendering API response carries the head-injected `<script async>`
+  (`docs/questions-for-shopify-dev.md` Q7b). One `fetch()` settles it.
+
+### The mechanism, retained
+
+On each swap: dispatch `shopify:section:unload` on every outgoing `#shopify-section-*`
+before removal, insert, then `shopify:section:load` on each incoming one.
+`detail.sectionId` is the **full dynamic section ID** — `template--5678__image_banner`,
+`sections--1234__header` — the same string as in the wrapper's `id="shopify-section-[id]"`
+(`api/ajax/section-rendering.md:116-126`). Derive it by stripping the prefix off the
+element id; no JSON-key parsing belongs in this path. Implemented in
+`src/app-compat.ts`.
+
+**Free classification.** Section-group sections carry a second class on the wrapper —
+`class="shopify-section shopify-section-group-header-group"`
 (`api/ajax/section-rendering.md:65`). The dispatcher can tell shell from container
 straight off the element; static resolution is only needed by the audit.
-
-**Symmetry with what already exists.** `src/runtime.ts:557–573` already *consumes*
-these events in the theme editor, where PJAX is off, to re-init Pusha's own
-components. Dispatching on swap makes Pusha a producer of the same contract it
-already trusts as a consumer. The two paths can never both run.
-
-### What shopify.dev confirmed, and what it didn't
-
-Asked directly (2026-08-06). Useful because it closed every door to overselling
-this:
-
-- **Not documented as supported, not documented as forbidden.** There is no
-  reserved-namespace rule and no alternative signal a theme can emit that
-  extensions are required to observe. Ship it as best-effort compatibility,
-  never as a Shopify-blessed lifecycle. Say so in the README.
-- **No published ordering guarantee.** Don't rely on anything beyond
-  unload → remove → insert → load, and don't assume strict 1:1 pairing.
-- **No guidance either way on `Shopify.designMode` gating.** Apps that wrap their
-  listener in a design-mode check stay dead on the storefront, and nothing can fix
-  that. This is the residual Part 0 can't measure — only installing Pusha can.
-- **App embeds have no re-init signal at all.** Their failure is subtler than
-  inert: an embed holding references into the swapped container goes stale
-  silently. Nothing can be emitted to repair it.
-- **Shopify has no published position on client-side navigation in themes.** The
-  Section Rendering API is the sanctioned partial-render path, and it has no
-  lifecycle event attached either.
-
-**Unload is not optional.** Dispatching load without unload leaks a listener set
-per navigation, compounding across a session — worse than doing nothing.
-
-**Double-init is a real risk** on apps that re-bind without guarding. Argues for
-allowlist or opt-in until the corpus says otherwise.
-
-***
 
 ## Test corpus
 
