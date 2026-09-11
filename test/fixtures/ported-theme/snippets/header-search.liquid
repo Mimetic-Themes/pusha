@@ -1,0 +1,15 @@
+<div class="header-search" data-pusha-close-on-nav>
+  <input type="search" id="HeaderSearch">
+</div>
+<script>
+  (function () {
+    function bind() {
+      document.addEventListener('click', function (event) {
+        if (event.target.closest('.header-search')) return;
+        document.querySelector('.header-search').classList.remove('is-open');
+      });
+    }
+    window.Pusha ? window.Pusha.onFirstLoad(bind)
+                 : document.addEventListener('DOMContentLoaded', bind);
+  })();
+</script>

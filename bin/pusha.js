@@ -494,6 +494,34 @@ async function runInit(args) {
 // audit can report which ones are active. Pass `--no-whitelist` to disable
 // every entry and see the raw, unfiltered audit.
 
+// Is this {% javascript %} body nothing but Pusha registrations? Scans at
+// brace depth 0 so a `sectionInits[...] = function (root) { … }` counts as one
+// statement no matter what is inside it. Deliberately strict: any other
+// top-level statement means the body still does procedural work on parse, and
+// the finding is real.
+function portedSectionBody(body) {
+  const src = body
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+  const statements = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of src) {
+    if (ch === '{' || ch === '(' || ch === '[') depth++;
+    else if (ch === '}' || ch === ')' || ch === ']') depth--;
+    if (ch === ';' && depth === 0) {
+      statements.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  statements.push(current);
+  const meaningful = statements.map((t) => t.trim()).filter(Boolean);
+  if (meaningful.length === 0) return false;
+  return meaningful.every((t) => /^window\.theme\.section(Inits|Destroy)\s*\[/.test(t));
+}
+
 const WHITELISTS = {
   files: {
     description: "Skip Pusha's own bundled files — pusha.liquid is framework config (E false positive), pusha.min.js is the runtime (G/H false positives).",
@@ -509,6 +537,14 @@ const WHITELISTS = {
       { rule: /^window\.theme\.sectionDestroy\[/, why: 'individual sectionDestroy registration' },
       { rule: /^window\.theme\.config\s*=/, why: 'Pusha runtime config' },
     ],
+  },
+  E: {
+    description: 'Suppress E findings (inline <script>) in files that also call window.Pusha.on* hooks. The script has already been ported — it registers through the runtime instead of running procedurally on parse. Without this, the bridge snippets this skill tells you to write re-report as findings on the next pass, and an agent "fixes" the thing it just wrote.',
+    fileTest: (text) => /window\.Pusha\.on(FirstLoad|AfterSwap|AfterInit|BeforeNav|BeforeLeave|NavError)/.test(text),
+  },
+  F: {
+    description: 'Suppress F2 findings whose {% javascript %} body contains nothing but sectionInits / sectionDestroy registrations. That IS the ported shape. Without this a correctly ported section reports as work forever, and the audit can never say a port is finished.',
+    bodyTest: (body) => portedSectionBody(body),
   },
   G: {
     description: 'Suppress G findings (DOMContentLoaded handlers) in files that also call window.Pusha.on* hooks. These are typically the "fallback" branch of an `if (window.Pusha) { ... } else { addEventListener("DOMContentLoaded", ...) }` pattern — dead code on Pusha-loaded themes, kept defensively.',
@@ -1121,7 +1157,7 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
   // Each entry: { bucket, file, line?, match?, reason? } — the would-have-been
   // finding plus why it was suppressed. `files` keyed by Pusha-self filenames;
   // `G` keyed by the file-level Pusha.on* trigger; `H` keyed by line patterns.
-  const suppressed = { files: [], G: [], H: [] };
+  const suppressed = { files: [], E: [], F: [], G: [], H: [] };
 
   // A — external script src in liquid files (excluding JSON type)
   // B — JSON / ld+json data scripts
@@ -1158,10 +1194,15 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
     for (const file of walkFiles(dir, ['.liquid'], walkOpts)) {
       const text = stripLiquidComments(readFileText(file));
       const lines = text.split('\n');
+      // Same rationale as the G whitelist: a file that registers through the
+      // runtime has already been ported, however its <script> tag reads.
+      const pushaAware = useWhitelists && WHITELISTS.E.fileTest(text);
       for (let i = 0; i < lines.length; i++) {
         const ln = lines[i];
         if (/<script[^>]*>/i.test(ln) && !/src=/i.test(ln) && !/application\/(ld\+)?json/i.test(ln)) {
-          findings.E.push({ file: relative(themePath, file), line: i + 1, match: ln.trim() });
+          const entry = { file: relative(themePath, file), line: i + 1, match: ln.trim() };
+          if (pushaAware) suppressed.E.push({ bucket: 'E', ...entry, reason: 'file also calls window.Pusha.on*' });
+          else findings.E.push(entry);
         }
       }
     }
@@ -1173,7 +1214,14 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
       const text = stripLiquidComments(readFileText(file));
       if (!/\{%\s*javascript\s*%\}/.test(text)) continue;
       const hasClass = /class\s+\w+\s+extends\s+HTMLElement/.test(text);
-      findings.F.push({ file: relative(themePath, file), kind: hasClass ? 'F1' : 'F2' });
+      const kind = hasClass ? 'F1' : 'F2';
+      const rel = relative(themePath, file);
+      const body = (text.match(/\{%\s*javascript\s*%\}([\s\S]*?)\{%\s*endjavascript\s*%\}/) || [, ''])[1];
+      if (kind === 'F2' && useWhitelists && WHITELISTS.F.bodyTest(body)) {
+        suppressed.F.push({ bucket: 'F', file: rel, kind, match: '{% javascript %}', reason: 'body is only sectionInits/sectionDestroy registrations — already ported' });
+        continue;
+      }
+      findings.F.push({ file: rel, kind });
     }
   }
 
@@ -2135,7 +2183,7 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
   out += `## Suppressed by whitelists${NL}`;
   if (!whitelistsActive) {
     out += `  (whitelists are off — nothing was suppressed in this run)${NL}${NL}`;
-  } else if (!suppressed || (suppressed.files.length === 0 && suppressed.G.length === 0 && suppressed.H.length === 0)) {
+  } else if (!suppressed || (suppressed.files.length === 0 && suppressed.E.length === 0 && suppressed.F.length === 0 && suppressed.G.length === 0 && suppressed.H.length === 0)) {
     out += `  (none — no findings matched a whitelist in this run)${NL}${NL}`;
   } else {
     out += `  These findings were classified by the audit but excluded by an active whitelist.${NL}`;
@@ -2156,6 +2204,26 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
       for (const [file, counts] of byFile) {
         const parts = Object.entries(counts).map(([b, n]) => `${b} (${n})`).join(', ');
         out += `    ${file} → ${parts}${NL}`;
+      }
+    }
+    out += NL;
+
+    out += `  E — inline <script> in a file that also calls window.Pusha.on*${NL}`;
+    if (suppressed.E.length === 0) {
+      out += `    (no matches in this run)${NL}`;
+    } else {
+      for (const s of suppressed.E) {
+        out += `    ${s.file}:${s.line}: ${s.match}${NL}`;
+      }
+    }
+    out += NL;
+
+    out += `  F — {% javascript %} body is only sectionInits/sectionDestroy registrations (already ported)${NL}`;
+    if (suppressed.F.length === 0) {
+      out += `    (no matches in this run)${NL}`;
+    } else {
+      for (const s of suppressed.F) {
+        out += `    ${s.file}: ${s.match}${NL}`;
       }
     }
     out += NL;
@@ -2189,6 +2257,10 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
     out += `    skips: ${WHITELISTS.files.items.join(', ')}${NL}`;
     out += `  H — ${WHITELISTS.H.description}${NL}`;
     for (const p of WHITELISTS.H.patterns) out += `    drop /${p.rule.source}/  (${p.why})${NL}`;
+    out += `  E — ${WHITELISTS.E.description}${NL}`;
+    out += `    skip a file's E findings if it also calls window.Pusha.on*${NL}`;
+    out += `  F — ${WHITELISTS.F.description}${NL}`;
+    out += `    skip an F2 whose {% javascript %} body is only sectionInits/sectionDestroy registrations${NL}`;
     out += `  G — ${WHITELISTS.G.description}${NL}`;
     out += `    skip a file's G findings if it also calls window.Pusha.on*${NL}`;
     out += `  Pass --no-whitelist to disable all of the above and see raw findings.${NL}${NL}`;
@@ -2512,6 +2584,8 @@ async function runAudit(args) {
       whitelists: {
         files: { description: WHITELISTS.files.description, items: WHITELISTS.files.items },
         H: { description: WHITELISTS.H.description, patterns: WHITELISTS.H.patterns.map((p) => ({ rule: p.rule.source, why: p.why })) },
+        E: { description: WHITELISTS.E.description },
+        F: { description: WHITELISTS.F.description },
         G: { description: WHITELISTS.G.description },
       },
     }, null, 2) + '\n');

@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>Ported</title>
+    {% render 'pusha' %}
+  </head>
+  <body data-template="{{ template }}">
+    {% section 'header' %}
+    <main id="MainContent" data-page-container data-page-type="{{ template }}">
+      {{ content_for_layout }}
+    </main>
+  </body>
+</html>

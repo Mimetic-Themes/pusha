@@ -1,0 +1,17 @@
+<div class="hero" data-section-type="hero">
+  <h2>{{ section.settings.title }}</h2>
+  <button class="hero__cta">Shop</button>
+</div>
+
+{% javascript %}
+  window.theme.sectionInits['hero'] = function (root) {
+    root.classList.add('loaded');
+    var cta = root.querySelector('.hero__cta');
+    if (cta && !cta.dataset.initialized) {
+      cta.dataset.initialized = 'true';
+      cta.addEventListener('click', function () {
+        root.classList.toggle('hero--active');
+      });
+    }
+  };
+{% endjavascript %}

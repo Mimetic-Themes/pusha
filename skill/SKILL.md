@@ -1,6 +1,6 @@
 ---
 name: pusha
-description: Port a Shopify Online Store 2.0 theme to the Pusha PJAX runtime. Audits sections, snippets, and asset JS for PJAX compatibility, classifies each script by transformation difficulty, and produces diffs that wrap procedural JS in the `window.theme.sectionInits` registry. Invoke when the user says "port this theme to PJAX", "pusha audit", "wrap section scripts for Pusha", "make this theme PJAX-compatible", or names a theme directory and asks for a Pusha-readiness pass.
+description: Port a Shopify Online Store 2.0 theme to the Pusha PJAX runtime. Audits sections, snippets, blocks, templates, layout and asset JS for soft-navigation compatibility, classifies each script by transformation difficulty, and produces diffs that wrap procedural JS in the `window.theme.sectionInits` registry. Invoke when the user says "port this theme to PJAX", "pusha audit", "wrap section scripts for Pusha", "make this theme PJAX-compatible", or names a theme directory and asks for a Pusha-readiness pass.
 ---
 
 # pusha
@@ -12,11 +12,12 @@ Port a Shopify Online Store 2.0 theme to the Pusha PJAX runtime.
 For a typical Online Store 2.0 theme (Dawn-derived, no build pipeline):
 
 1. **`pusha init`** — installs the Path A runtime (`assets/pusha.min.js` + `snippets/pusha.liquid`) and patches `layout/theme.liquid`.
-2. **`pusha audit`** — classifies every script into buckets A–H, K, and reports the surface buckets (J analytics, L Liquid shell state, M shell UI, P partials). Most Dawn-shaped themes land mostly in A/B/C (safe) with a handful of E/G/H findings.
-3. **Read this skill** (or your agent does) — produces unified diffs in `./pusha-diffs/`, one per file, wrapping bucket E/F2/G scripts into `window.theme.sectionInits[handle] = function (root) { ... }`. No theme files edited in place.
-4. **Apply diffs with `git apply`**, run `shopify theme check` to catch any Liquid or JS errors introduced by the wrapping, then re-run `pusha audit` to confirm everything moved into safe buckets.
+2. **`pusha skill --claude`** (or `--cursor` / `--aider`) — installs this file and `PATTERNS.md` where the agent will find them.
+3. **`pusha audit --json --action transform`** — the mechanical work queue. The full report classifies every script into buckets A–H and K, plus the surface buckets J (analytics), L (Liquid shell state), M (shell UI), P (partials) and X (theme app extensions).
+4. **Work the queue**, one commit per file, on a branch. Apply `PATTERNS.md` routed by each finding's `location`. Anything not `action: transform` goes to the human, not into a guess.
+5. **`shopify theme check`**, then re-run `pusha audit` and compare against the previous run.
 
-The rest of this doc covers edge cases, install detection, the per-bucket transformation contract, and how to delegate worker agents. Skip to "Procedure" if the happy path is what you need.
+The rest of this doc covers edge cases, install detection, the per-bucket transformation contract, and how to delegate worker agents. `pusha audit --full` appends the whole of `PATTERNS.md` to the report, which is the one-read way to hand a worker everything it needs. Skip to "Procedure" if the happy path is what you need.
 
 ## This skill is bring-your-own-agent
 
@@ -51,7 +52,7 @@ Do NOT use this skill for:
 
 ### Step 1 — Locate the theme
 
-The user will either pass a path or one is obvious from context. Confirm the path is a Shopify theme by checking for `sections/`, `snippets/`, `assets/`, and `templates/` at the root. If `shopify.theme.toml` exists, even better.
+The user will either pass a path or one is obvious from context. Confirm the path is a Shopify theme the same way the CLI does — **any one** of `layout/theme.liquid`, `sections/`, or `config/settings_schema.json`. Do not require all four of `sections/ snippets/ assets/ templates/`: new-Liquid themes have no `sections/` at all and would be rejected. If `shopify.theme.toml` exists, even better.
 
 ### Step 1.5 — Check Pusha install + detect path
 
@@ -72,6 +73,16 @@ The package name is still `@mimeticthemes/pusha`, so imports are unaffected.
   npm install github:mimetic-themes/pusha
   # Add `import { initRuntime } from '@mimeticthemes/pusha'; initRuntime();` to your entry point
   ```
+  **Path B installs no Liquid.** `pusha init` writes the snippet and patches the
+  layout for Path A only, so on Path B the theme conventions are the dev's job
+  and nothing warns when they are missing. Confirm all three before auditing:
+  ```liquid
+  <body data-template="{{ template }}">
+    <main id="MainContent" data-page-container data-page-type="{{ template }}">
+  ```
+  Without `data-page-type` / `data-template`, `meta.template` is empty: named
+  transitions stop matching and active-link body-class sync degrades, silently.
+  There is also no config object and no default fade — both live in the snippet.
 - Otherwise → suggest Path A:
   ```bash
   npx github:mimetic-themes/pusha init
@@ -112,16 +123,42 @@ The whitelists are heuristic guards on syntax patterns — they trust the *regis
 
 ### Step 4 — Transform (only after approval) — delegate to agents
 
-For each in-scope file, **spawn a worker agent**. Each worker gets a tight, self-contained prompt:
+**Drive from `--json`, not from the text report.** Every finding carries:
+
+| Field | Use |
+|---|---|
+| `id` | Stable across the edits you make — line numbers are excluded from it. Address findings by `id`, record progress by `id`, and a half-finished port resumes cleanly. |
+| `action` | `transform` → do it. `decide` → hand to the human. `verify` → needs a real storefront. `none` → **do not touch**. |
+| `location` | Which fix applies. See `PATTERNS.md` → "Routing by location". Non-negotiable. |
+| `bucket` | What the script is. |
+
+`queue` gives the ids in work order, mechanical first. `doNotTransform` names the
+buckets to leave alone. Fetch one slice per worker rather than the whole report:
+
+```sh
+pusha audit --json --action transform --file sections/
+pusha audit --json --bucket E,G
+pusha audit --json --action decide      # the batch for the human
+```
+
+For each in-scope file, **spawn a worker agent** with a tight, self-contained prompt:
 
 - The file path
-- Its classification bucket (A–H) from the audit
-- The matching section of `PATTERNS.md` for that bucket
-- A directive: "produce a unified diff against this file. Do not edit in place. If the script doesn't match the documented pattern, return a `SKIP: <reason>` line instead of a diff."
+- The finding `id`, `bucket` **and `location`** — a worker without the location
+  cannot route, and will wrap a shell script in `sectionInits`, where it will
+  never run
+- The matching section of `PATTERNS.md`, plus the routing entry for that location
+- A directive: "if the script doesn't match the documented pattern, or the
+  location is one you have no rule for, return `SKIP: <reason>`."
 
-Run workers in parallel when possible — each is independent, operates on one file, returns one diff. The orchestrating agent (the one running this skill) collects the diffs into `./pusha-diffs/` plus a manifest of what transformed, what skipped, and why.
+Run workers in parallel when possible — each is independent and operates on one file.
 
-Do not write to the theme directory. The user applies patches manually with `git apply` (assumes the theme is in a git repo with a clean working tree).
+**Write into the theme, on a branch, one commit per file.** The human reviews the
+diff, which is the point: they watch the port happen and steer it, rather than
+triaging a pile of patches. Require a clean working tree before starting, and
+never commit to the default branch. Record each finding `id` and its outcome
+(transformed / skipped / deferred) in `.pusha/MANIFEST.md` so a later run can tell
+new findings from ones already judged.
 
 Rules workers must follow:
 - Transformations come from `PATTERNS.md` verbatim. Do not improvise new wrapping shapes.
@@ -138,14 +175,18 @@ You are transforming a Shopify Online Store 2.0 section file to be PJAX-safe
 for the Pusha runtime.
 
 File: sections/announcement-bar.liquid
-Bucket: E (procedural inline <script> in section/snippet — wrap)
-Pattern: PATTERNS.md "E. Procedural inline `<script>` in section/snippet — wrap"
+Finding: 4f2a91c0de11
+Bucket: E (procedural inline <script>)
+Location: section
+Pattern: PATTERNS.md "E. Procedural inline `<script>`" + "Routing by location" → `section`
 
 Source file:
 <<< [paste file contents here] >>>
 
 Instructions:
 - Follow the pattern in PATTERNS.md exactly. Do not improvise new wrapping shapes.
+- The Location above decides the fix. This prompt is the `section` case. If the
+  file turns out not to be section scope, return SKIP rather than wrapping it.
 - Use the section basename (`announcement-bar`) as the `data-section-type` and
   the `sectionInits` key.
 - Move the inline `<script>` body into a single `{% javascript %}` block in the
@@ -161,18 +202,60 @@ Instructions:
   inside `{% javascript %}`, OR the file already has an incompatible
   `{% javascript %}` block, return only: `SKIP: <one-line reason>`.
 
-Output: a unified diff against the original file, and nothing else. No commentary.
+Output: the edited file, and nothing else. No commentary.
 ```
 
-Substitute the file, bucket, and pattern reference per-invocation. The orchestrator runs these in parallel, collects diffs into `./pusha-diffs/<theme>/`, and writes a `MANIFEST.md` tagging each file as transformed / skipped / deferred.
+Substitute the file, bucket, **location** and pattern reference per-invocation. The
+orchestrator runs these in parallel, commits each result separately, and writes
+`.pusha/MANIFEST.md` tagging each finding id as transformed / skipped / deferred.
+
+### Step 4.5 — Batch the judgment calls, don't dribble them
+
+Everything the audit marks `action: decide` goes to the human **in one block**,
+after the mechanical work is committed — not one interruption per finding. A port
+produces dozens of these; asked one at a time they stop being decisions and
+become a queue the human rubber-stamps.
+
+```sh
+pusha audit --json --action decide
+```
+
+For each, give: the finding `id`, the file and line, the audit's own line quoted,
+the surrounding code, and the options with a recommendation. Then stop and wait.
+Never pick a `decide` on the agent's own authority — that is the difference
+between the human steering the port and merely watching it happen.
+
+Typical members of this batch: bucket L `ask` findings (does this shell value
+need to be live?), bucket M custom modals (does it already own its close
+behaviour?), bucket X at-risk app blocks (opt the page out, or ask the vendor?),
+bucket H reachability, and any `include` whose render context you could not
+determine.
+
+### Step 4.6 — Re-running against an already-ported theme
+
+The skill must be idempotent, and it must survive an upstream merge (Shopify
+ships a new Dawn; the fork rebases).
+
+1. Read `.pusha/MANIFEST.md` first. It is keyed by finding `id`, and ids are
+   stable across the edits a port makes.
+2. Run the audit. Any `id` already recorded as transformed or skipped is
+   **settled** — do not re-open it, and do not re-ask a `decide` the human
+   already answered.
+3. Work only ids absent from the manifest. Those are genuinely new: upstream
+   added code, or a file changed enough that its finding is materially different.
+4. An id that vanished is not automatically a success — confirm it went away
+   because the file was ported, not because the file was deleted upstream.
 
 ### Step 5 — Validate
 
-After the user applies patches with `git apply`, run two checks in this order:
+With the transform commits on the branch, run two checks in this order:
 
 **5a — `shopify theme check`** (required, not optional).
 
-It surfaces Liquid syntax errors, malformed `{% javascript %}` blocks, and JS parse failures inside section/snippet scripts. A wrapping that looks correct in the diff can still produce a `{% javascript %}` block that fails to render — extra brace, dangling token, accidental `{{` interpolation. The browser symptom is silent: `[pusha/init] no sectionInits handler for "<handle>"` with no other error, because the entire `{% javascript %}` tag silently dropped and the registration never executed. `pusha audit` cannot catch this — it inspects source shape, not rendered Liquid.
+It surfaces Liquid syntax errors, malformed `{% javascript %}` blocks, and JS parse failures inside section/snippet scripts. A wrapping that looks correct in the diff can still produce a `{% javascript %}` block that fails to render — extra brace, dangling token, accidental `{{` interpolation. The browser symptom is silent, and silent by default: the diagnostic
+`[pusha/init] no sectionInits handler for "<handle>"` only prints with
+`debug: true` set in `snippets/pusha.liquid`. **Turn it on before validating.**
+Without it there is no error at all, because the entire `{% javascript %}` tag silently dropped and the registration never executed. `pusha audit` cannot catch this — it inspects source shape, not rendered Liquid.
 
 Run it from the theme root:
 
@@ -182,14 +265,36 @@ shopify theme check
 
 Treat any `error`-severity finding in sections/snippets the skill touched as a blocker. Style warnings (`UnusedAssign`, `MissingTemplate` in unrelated files, etc.) can be ignored. If `shopify` isn't on `$PATH`, the dev needs Shopify CLI installed — surface that as a blocker, don't skip the step.
 
-**5b — `pusha audit`** (idempotency check).
+**5b — `pusha audit`** (progress check, not a pass/fail gate).
 
-Wrapped scripts should classify into the same "safe" buckets as their already-wrapped counterparts. Anything that re-classifies as needing transformation again is a bug in the skill — report and don't double-wrap.
+**A correctly ported file should disappear from the queue.** Two whitelists make
+that true, and both only fire on the exact ported shape:
+
+- an F2 whose `{% javascript %}` body contains *nothing but* `sectionInits` /
+  `sectionDestroy` registrations
+- an E or G finding in a file that also calls `window.Pusha.on*` — the bridge
+  shape this skill tells you to write
+
+So a finished port audits with an empty `transform` queue:
+
+```sh
+pusha audit --json --action transform      # expect count: 0
+```
+
+If a file you transformed is still in the queue, the wrapper is not the
+documented shape — most often procedural statements left at the top level of the
+`{% javascript %}` body alongside the registration. Read
+`## Suppressed by whitelists` to see what the audit *did* accept, and
+`--no-whitelist` to see everything raw.
+
+Judge completion by the queue plus `.pusha/MANIFEST.md`, and treat these as real
+problems: a finding that moved to a *different* bucket than before, a new `id` in
+a file you just edited, or a count that went up.
 
 ## Output contract
 
 - Audit report: stdout, structured by bucket, includes file path + line range + classification per script.
-- Transform output: one `.patch` file per source file under `./pusha-diffs/`, plus a manifest listing what was changed and what was deferred.
+- Transform output: one commit per source file on a working branch, plus `.pusha/MANIFEST.md` keyed by finding `id`, listing what was changed, what was skipped and why, and what was deferred to the human.
 - Never edit `theme/` files in place. The user applies patches manually.
 
 ## What this skill is NOT
@@ -197,7 +302,7 @@ Wrapped scripts should classify into the same "safe" buckets as their already-wr
 - Not a build tool. It doesn't bundle, compile, or install dependencies.
 - Not a runtime. It produces source-level changes; the Pusha runtime is a separate package the theme depends on.
 - Not a one-shot rewriter. It is a conservative auditor + targeted transformer. Anything ambiguous defers to the human.
-- Not an MCP server, not a CLI, not a library. It's a procedure document + a bash script. Bring your own agent.
+- Not an MCP server, not a CLI, not a library. It's a procedure document plus `PATTERNS.md`, driven by the `pusha audit` CLI. Bring your own agent.
 
 ## Runtime contract reference
 
@@ -222,7 +327,14 @@ The local file audit (`pusha audit`) has a structural blind spot: it can't see s
 
 - **I. Third-party app scripts** — listed by source app, with PJAX-compatibility verdict where known.
 
-Bucket I findings are **never auto-transformed**. They get triaged manually: the dev decides whether to keep the app, exclude its pages from PJAX with `data-no-transition`, or contact the app vendor about PJAX support.
+Bucket X findings are **never transformed** — see `PATTERNS.md` → "X. Theme app
+extensions". Measured: exactly two app-block shapes survive a swap (one that
+listens for `shopify:page:view`, and one authored as a custom element), and every
+other loading shape goes inert identically. If the merchant owns the app, the fix
+belongs in the app and the agent writes it up for the vendor. If not, the options
+are `data-no-transition` around the navigation or treating the page as ineligible.
+Never enable `appCompat.*` on an agent's initiative — `reexecuteExtensionScripts`
+is measured harmful, and the two flags compound multiplicatively.
 
 ### Connection to local file audit
 
