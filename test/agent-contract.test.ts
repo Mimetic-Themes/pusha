@@ -285,3 +285,121 @@ test('a section group rendered inside the container is not shell', () => {
   const found = Object.values<any[]>(j.findings).flat().find((x) => x.file === 'sections/promo.liquid');
   assert.notEqual(found?.location, 'shell', 'a group inside the container is swapped like any page content');
 });
+
+// ─── manifest ───────────────────────────────────────────────────────────────
+// Stable ids only pay off if something reads the record of what was judged.
+
+test('a manifest settles findings and drops them from the queue', () => {
+  const theme = join(mkdtempSync(join(tmpdir(), 'pusha-manifest-')), 'theme');
+  cpSync(join(fixturesDir, 'os2-sections'), theme, { recursive: true });
+
+  const before = audit(theme);
+  assert.equal(before.manifest.present, false);
+  const settling: string[] = before.queue.slice(0, 2);
+  assert.ok(settling.length === 2, 'fixture has work to settle');
+
+  mkdirSync(join(theme, '.pusha'), { recursive: true });
+  writeFileSync(
+    join(theme, '.pusha', 'MANIFEST.md'),
+    ['# Port manifest', '', ...settling.map((id) => `- \`${id}\` transformed — done`), ''].join('\n'),
+  );
+
+  const after = audit(theme);
+  assert.equal(after.manifest.present, true);
+  assert.equal(after.manifest.recorded, 2);
+  assert.equal(after.manifest.settled, 2);
+  assert.equal(after.queue.length, before.queue.length - 2);
+  for (const id of settling) assert.equal(after.queue.includes(id as string), false, `${id} left the queue`);
+
+  // Settled work keeps its classification but is never handed to a worker.
+  const byId = new Map<string, any>(Object.values<any[]>(after.findings).flat().map((f) => [f.id, f]));
+  for (const id of settling) assert.equal(byId.get(id)?.settled, 'transformed');
+  const sliced = audit(theme, '--action', 'transform');
+  for (const id of settling) assert.equal(sliced.findings.some((f: any) => f.id === id), false);
+
+  // And it stays auditable.
+  const raw = audit(theme, '--ignore-manifest');
+  assert.equal(raw.manifest.honored, false);
+  assert.equal(raw.queue.length, before.queue.length);
+});
+
+test('the manifest accepts any line carrying an id and an outcome', () => {
+  const theme = join(mkdtempSync(join(tmpdir(), 'pusha-manifest2-')), 'theme');
+  cpSync(join(fixturesDir, 'os2-sections'), theme, { recursive: true });
+  const [a, b, c] = audit(theme).queue as string[];
+
+  mkdirSync(join(theme, '.pusha'), { recursive: true });
+  writeFileSync(
+    join(theme, '.pusha', 'MANIFEST.md'),
+    [
+      '| id | outcome |',
+      `| ${a} | transformed |`,
+      `* ${b} — skipped: Liquid tokens inside the javascript tag`,
+      `${c} deferred (asked the merchant, awaiting answer)`,
+      'a line with no id at all',
+      '- `deadbeefcafe` transformed — an id from another theme',
+    ].join('\n'),
+  );
+
+  const j = audit(theme);
+  assert.equal(j.manifest.recorded, 4, 'four ids parsed, including the unmatched one');
+  assert.equal(j.manifest.settled, 3, 'three matched findings in this theme');
+  for (const id of [a, b, c]) assert.equal(j.queue.includes(id), false);
+});
+
+// ─── whitelists that verify rather than assume ──────────────────────────────
+
+test('a port with the right shape but the wrong wiring is reported, not suppressed', () => {
+  // The failure a whitelist invites: markup that reads as finished and is
+  // silently dead. Worse than an untouched file.
+  const theme = join(mkdtempSync(join(tmpdir(), 'pusha-suspect-')), 'theme');
+  cpSync(join(fixturesDir, 'ported-theme'), theme, { recursive: true });
+  const hero = join(theme, 'sections', 'hero.liquid');
+  writeFileSync(hero, readFileSync(hero, 'utf8').replace("sectionInits['hero']", "sectionInits['heroo']"));
+
+  const j = audit(theme);
+  const found = Object.values<any[]>(j.findings).flat().find((f) => f.file === 'sections/hero.liquid');
+  assert.ok(found, 'not suppressed');
+  assert.ok(Array.isArray(found.suspect) && found.suspect.length, 'carries the inconsistency');
+  assert.match(found.suspect.join(' '), /can never fire/);
+  assert.equal(found.action, 'decide', 're-running the wrapper would not fix this');
+  assert.ok(j.queue.includes(found.id), 'and it is queued');
+  assert.equal(j.suppressed.F.some((x: any) => x.file === 'sections/hero.liquid'), false);
+});
+
+test('sectionDestroy without a matching sectionInits is caught', () => {
+  const theme = join(mkdtempSync(join(tmpdir(), 'pusha-destroy-')), 'theme');
+  cpSync(join(fixturesDir, 'ported-theme'), theme, { recursive: true });
+  const ticker = join(theme, 'sections', 'ticker.liquid');
+  writeFileSync(ticker, readFileSync(ticker, 'utf8').replace("sectionDestroy['ticker']", "sectionDestroy['tickr']"));
+
+  const j = audit(theme);
+  const found = Object.values<any[]>(j.findings).flat().find((f) => f.file === 'sections/ticker.liquid');
+  assert.match(found?.suspect?.join(' ') ?? '', /sectionDestroy\['tickr'\] has no matching sectionInits/);
+});
+
+test('the H bridge whitelist is narrow — only the IIFE, only shell, only Pusha-aware', () => {
+  const clean = audit(join(fixturesDir, 'ported-theme'));
+  assert.equal(clean.queue.length, 0, 'a finished port presents no work at all');
+  assert.ok(
+    clean.suppressed.H.some((x: any) => /bridge shape/.test(x.reason)),
+    'the bridge IIFE is suppressed, and listed',
+  );
+
+  // A top-level mutation in the same file is a different shape and still reports.
+  const theme = join(mkdtempSync(join(tmpdir(), 'pusha-h-')), 'theme');
+  cpSync(join(fixturesDir, 'ported-theme'), theme, { recursive: true });
+  const snippet = join(theme, 'snippets', 'header-search.liquid');
+  writeFileSync(snippet, readFileSync(snippet, 'utf8').replace('<script>', '<script>\nwindow.myThemeState = { open: false };'));
+
+  const j = audit(theme);
+  assert.ok(
+    (j.findings.H ?? []).some((f: any) => /top-level window\/document mutation/.test(f.reason)),
+    'a real module-state finding in a Pusha-aware shell file still reports',
+  );
+  assert.equal(
+    j.suppressed.H.some((x: any) => /bridge shape/.test(x.reason)),
+    false,
+    'and the bridge whitelist declines to fire for that file',
+  );
+});

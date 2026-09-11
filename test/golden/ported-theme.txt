@@ -32,9 +32,7 @@ whitelists: on (default — pass --no-whitelist to disable)
 
 ## H. Module-level state — hard, human review
   Human review. Module-level state and IIFEs hold closures that don't replay on swap. Check reachability — dead code can be deleted; live code needs refactor.
-  snippets/header-search.liquid  [IIFE with no class — likely procedural state]  [shell]
-  Fix by location:
-    · shell       → Shell module state persists across navs — usually intended, but verify it should not reset per page.
+  (none)
 
 ## K. Portal-to-body custom elements — add data-pusha-cleanup
   Portal-to-body custom element. Survives a swap because connectedCallback moves it outside the swap container. Add `data-pusha-cleanup` to every render site so Pusha removes it before each nav.
@@ -75,7 +73,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   E procedural inline scripts:   0
   F {% javascript %} blocks:     0  (F1 safe: 0, F2 wrap: 0)
   G DOMContentLoaded handlers:   0
-  H module-level state:          1
+  H module-level state:          0
   K portal-to-body classes:      1  (0 render site(s) need data-pusha-cleanup)
   L Liquid persistent state:     0  (auto: 0, ask: 0, ok: 0)
   M persistent-shell stateful UI: 0  (modals: 0, body-class lockouts: 0)
@@ -100,8 +98,8 @@ whitelists: on (default — pass --no-whitelist to disable)
   G — DOMContentLoaded handler in a file that also calls window.Pusha.on*
     snippets/header-search.liquid:13: : document.addEventListener('DOMContentLoaded', bind);
 
-  H — canonical Pusha top-level mutation (sectionInits / sectionDestroy / config / bootstrap)
-    (no matches in this run)
+  H — canonical Pusha top-level mutation, and the bridge IIFE in a Pusha-aware shell file
+    snippets/header-search.liquid: IIFE with no class — likely procedural state    [bridge shape in a Pusha-aware shell file]
 
 ## Active whitelists
   files — Skip Pusha's own bundled files — pusha.liquid is framework config (E false positive), pusha.min.js is the runtime (G/H false positives).
@@ -122,15 +120,14 @@ whitelists: on (default — pass --no-whitelist to disable)
   Pass --no-whitelist to disable all of the above and see raw findings.
 
 ## Next steps
+  No .pusha/MANIFEST.md yet. Record each finding id and its outcome there as you go;
+  later runs skip what is already judged instead of re-asking.
+
   This report is written to be worked by a coding agent. In --json every finding
   carries a stable `id` and an `action`, and `queue` lists the work in order.
   Install the rules it applies with: pusha skill --claude
 
-    decide       1   Hx1
-                     Do not guess. Surface to the supervising human with the surrounding code and the options.
-
-    pusha audit --json --action transform   # the mechanical queue, in order
-    pusha audit --json --action decide      # the calls that are yours to make
+  Nothing to do — no finding in this theme carries an action.
 
   Transformation contracts by location (every E/F2/G/H finding carries a [location] tag):
     section     — data-section-type="<handle>" on the root; window.theme.sectionInits[handle] = (root) => {…};
