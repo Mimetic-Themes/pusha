@@ -10,7 +10,7 @@ Pusha loads the next page in the background and swaps only the main content. The
 
 ## Quickstart
 
-You need Node 20.19 or later and a theme folder with `layout/theme.liquid`.
+You need Node 22.13 or later and a theme folder with `layout/theme.liquid`.
 
 ```sh
 cd path/to/your/theme
@@ -136,7 +136,7 @@ initRuntime();
 ```
 
 Both paths clone the repo and run the build on install, so they need Node
-`^20.19.0 || ^22.13.0 || >=24.0.0` (the floor set by Vite and jsdom) and take
+`^22.13.0 || >=24.0.0` and take
 longer than a registry install. Nothing else differs — the package
 name, the import specifiers, and the CLI all behave the same.
 

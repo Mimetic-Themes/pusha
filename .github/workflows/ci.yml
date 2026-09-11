@@ -19,7 +19,7 @@ jobs:
       matrix:
         # The floors declared in package.json `engines`, plus current.
         # If one of these fails, `engines` is wrong and the README lies.
-        node: ['20.19', '22.13', '24']
+        node: ['22.13', '24']
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
