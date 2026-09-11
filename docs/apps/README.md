@@ -15,7 +15,7 @@ exists, use [the triage procedure](#triage-a-new-app) below.
 
 | App | Status | Summary |
 | --- | --- | --- |
-| [judge-me.md](judge-me.md) | Partly safe | Star ratings and most widgets survive. The review widget needs a re-fetch. |
+| [judge-me.md](judge-me.md) | Partly safe | Star ratings and most widgets survive. The review widget needs an API re-fetch — no re-init call exists. |
 | [zapiet.md](zapiet.md) | ⚠ Breaks, high severity | Widget goes inert. Checkout data is lost. Fix with `Zapiet.start()`. |
 
 ---
