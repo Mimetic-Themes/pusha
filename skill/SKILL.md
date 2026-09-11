@@ -157,8 +157,20 @@ Run workers in parallel when possible — each is independent and operates on on
 diff, which is the point: they watch the port happen and steer it, rather than
 triaging a pile of patches. Require a clean working tree before starting, and
 never commit to the default branch. Record each finding `id` and its outcome
-(transformed / skipped / deferred) in `.pusha/MANIFEST.md` so a later run can tell
-new findings from ones already judged.
+(transformed / skipped / deferred) in `.pusha/MANIFEST.md`. **The CLI reads this
+file** — settled findings keep their bucket and action but leave the `queue`, and
+a filtered query never hands a worker work that is already judged.
+
+Any line carrying an id and one of the three outcome words counts, so write it
+however reads best for the human reviewing it:
+
+```markdown
+- `1934fec07316` transformed — sections/hero.liquid
+- `ee618be529bc` skipped: Liquid tokens can't survive inside {% javascript %}
+- `3ff3b44c1c5f` deferred (asked the merchant about the cart drawer)
+```
+
+`--ignore-manifest` shows everything again.
 
 Rules workers must follow:
 - Transformations come from `PATTERNS.md` verbatim. Do not improvise new wrapping shapes.
@@ -236,15 +248,15 @@ determine.
 The skill must be idempotent, and it must survive an upstream merge (Shopify
 ships a new Dawn; the fork rebases).
 
-1. Read `.pusha/MANIFEST.md` first. It is keyed by finding `id`, and ids are
-   stable across the edits a port makes.
-2. Run the audit. Any `id` already recorded as transformed or skipped is
-   **settled** — do not re-open it, and do not re-ask a `decide` the human
-   already answered.
-3. Work only ids absent from the manifest. Those are genuinely new: upstream
-   added code, or a file changed enough that its finding is materially different.
-4. An id that vanished is not automatically a success — confirm it went away
-   because the file was ported, not because the file was deleted upstream.
+1. Just run the audit. The CLI reads `.pusha/MANIFEST.md` itself, so the queue
+   already excludes everything previously judged — no bookkeeping to redo, and
+   no `decide` to re-ask.
+2. Work the queue. Everything in it is genuinely new: upstream added code, or a
+   file changed enough that its finding hashes differently.
+3. Check `manifest.recorded` against `manifest.settled`. A gap means recorded
+   ids matched nothing this run — the file was ported and the finding is gone,
+   or upstream deleted it. Confirm which before assuming success.
+4. Append new outcomes to the manifest as you go.
 
 ### Step 5 — Validate
 
@@ -281,7 +293,14 @@ So a finished port audits with an empty `transform` queue:
 pusha audit --json --action transform      # expect count: 0
 ```
 
-If a file you transformed is still in the queue, the wrapper is not the
+If a file you transformed is still in the queue, read
+**`## ⚠ Looks ported, wired wrong`** first. A whitelist only suppresses a shape
+whose wiring lines up, so that section names the exact inconsistency — a handle
+registered for a `data-section-type` that does not exist, a `sectionDestroy` with
+no matching `sectionInits`, a root nothing initializes. Those carry
+`action: decide`, because re-running the wrapper would not fix them.
+
+If a transformed file is queued with no entry there, the wrapper is not the
 documented shape — most often procedural statements left at the top level of the
 `{% javascript %}` body alongside the registration. Read
 `## Suppressed by whitelists` to see what the audit *did* accept, and

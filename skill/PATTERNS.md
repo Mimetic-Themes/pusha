@@ -1140,8 +1140,18 @@ Cart-state integration is **not a script bucket** (A–H, K, and the surface buc
 
 ## Whitelists — what they hide, when to refresh trust
 
-Five are active: `files`, `E`, `F`, `G` and `H`, plus an unconditional `L`
-whitelist that `--no-whitelist` does **not** disable. `E` and `F` are the ones
+Six are active: `files`, `E`, `F`, `G`, `H` and `H_shellBridge`, plus an
+unconditional `L` whitelist that `--no-whitelist` does **not** disable.
+
+**They verify before they suppress.** A whitelist trusts a shape, and the failure
+that invites is markup reading as finished while being silently dead. So the F
+whitelist checks the wiring lines up — every registered handle has a matching
+`data-section-type`, every `sectionDestroy` has its `sectionInits`, every root is
+initialized — and anything that fails lands under `## ⚠ Looks ported, wired
+wrong` with the inconsistency named, rather than being suppressed.
+`H_shellBridge` is the narrowest: only the IIFE-shaped finding, only at `shell`
+location, only in a file registering a Pusha hook, and only when that file has no
+top-level `window.` / `document.` mutation beside it. `E` and `F` are the ones
 that make a finished port readable — they suppress the shapes this skill tells
 you to write, so a correctly ported theme reports no transform work. Everything
 suppressed is listed under `## Suppressed by whitelists` in the text report and

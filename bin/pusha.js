@@ -48,6 +48,8 @@ audit options:
   --no-whitelist        Disable false-positive filters (canonical Pusha patterns,
                         Pusha-self files, fallback DOMContentLoaded handlers)
                         and show all raw findings
+  --ignore-manifest     Don't read .pusha/MANIFEST.md; treat every finding as
+                        unsettled
   --help                Detail on the JSON contract and the filters
   path                  Theme directory to audit (defaults to cwd)
 
@@ -101,6 +103,17 @@ orchestrator handing each worker its own queue:
 
 A filtered response drops the whitelists, app surfaces and analytics blocks,
 and carries bucketRules and remediationByLocation for the matched buckets only.
+
+Resuming a port: record each finding id and its outcome in .pusha/MANIFEST.md
+and later runs skip it. Any line carrying an id and one of transformed /
+skipped / deferred counts, so write it however reads best:
+
+    - \`1934fec07316\` transformed — sections/hero.liquid
+    - \`ee618be529bc\` skipped: Liquid tokens inside {% javascript %}
+
+Settled findings keep their bucket and action but leave the queue, and filtered
+queries never hand a worker work that is already judged. --ignore-manifest
+shows everything again.
 
 Examples:
   pusha audit                        # full text report
@@ -522,6 +535,61 @@ function portedSectionBody(body) {
   return meaningful.every((t) => /^window\.theme\.section(Inits|Destroy)\s*\[/.test(t));
 }
 
+// A whitelist trusts a SHAPE. The failure it invites is markup that looks ported
+// and is not wired up — a handle registered for a root that does not exist, a
+// destroy with no init, a handle that does not match the file. Those read as
+// "done" and are silently dead.
+//
+// So before suppressing, check the wiring lines up. Anything that does not is
+// reported instead, as a `decide`, with the specific inconsistency named. The
+// whitelist declining to fire is more useful than the whitelist firing.
+function portedSectionIssues(text, relPath) {
+  const issues = [];
+  const handles = (pattern) => {
+    const found = new Set();
+    const re = new RegExp(pattern, 'g');
+    let m;
+    while ((m = re.exec(text)) !== null) found.add(m[1]);
+    return found;
+  };
+  const inits = handles(String.raw`window\.theme\.sectionInits\s*\[\s*['"]([\w-]+)['"]`);
+  const destroys = handles(String.raw`window\.theme\.sectionDestroy\s*\[\s*['"]([\w-]+)['"]`);
+  const roots = handles(String.raw`data-section-type\s*=\s*['"]([\w-]+)['"]`);
+  const basename = relPath.split('/').pop().replace(/\.liquid$/, '');
+
+  for (const h of inits) {
+    if (!roots.has(h)) {
+      issues.push(`sectionInits['${h}'] is registered but no data-section-type="${h}" exists in this file — the handle can never fire`);
+    } else if (h !== basename && relPath.startsWith('sections/')) {
+      issues.push(`handle '${h}' does not match the section basename '${basename}' — verify this is deliberate`);
+    }
+  }
+  for (const h of destroys) {
+    if (!inits.has(h)) {
+      issues.push(`sectionDestroy['${h}'] has no matching sectionInits['${h}'] in this file`);
+    }
+  }
+  for (const r of roots) {
+    if (!inits.has(r) && inits.size > 0) {
+      issues.push(`data-section-type="${r}" has no sectionInits['${r}'] — this root is never initialized`);
+    }
+  }
+  return issues;
+}
+
+// Same idea for the hook-registration whitelists: the file names a Pusha hook,
+// but is the procedural code actually inside it? A registration sitting beside
+// top-level work that still runs on parse is not ported, and suppressing its
+// findings would hide the part that breaks.
+function hookRegistrationIssues(scriptBody) {
+  const issues = [];
+  const withoutStrings = scriptBody.replace(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g, '""');
+  if (/window\.Pusha\.on\w+\s*\(\s*(?:function\s*\(\s*\w*\s*\)\s*\{\s*\}|\(\s*\w*\s*\)\s*=>\s*\{\s*\})/.test(withoutStrings)) {
+    issues.push('the hook is registered with an empty callback — it does nothing');
+  }
+  return issues;
+}
+
 const WHITELISTS = {
   files: {
     description: "Skip Pusha's own bundled files — pusha.liquid is framework config (E false positive), pusha.min.js is the runtime (G/H false positives).",
@@ -545,6 +613,10 @@ const WHITELISTS = {
   F: {
     description: 'Suppress F2 findings whose {% javascript %} body contains nothing but sectionInits / sectionDestroy registrations. That IS the ported shape. Without this a correctly ported section reports as work forever, and the audit can never say a port is finished.',
     bodyTest: (body) => portedSectionBody(body),
+  },
+  H_shellBridge: {
+    description: 'Suppress the IIFE-shaped H finding in a persistent-shell file that also calls window.Pusha.on*. That combination IS the documented bridge shape — an IIFE wrapping a bind function, registered through the runtime. Deliberately narrow: only the IIFE reason, only at shell location, only in a Pusha-aware file. Top-level window/document mutations keep reporting, because that is where real module-state problems hide.',
+    reasonTest: (reason) => /^IIFE with no class/.test(reason || ''),
   },
   G: {
     description: 'Suppress G findings (DOMContentLoaded handlers) in files that also call window.Pusha.on* hooks. These are typically the "fallback" branch of an `if (window.Pusha) { ... } else { addEventListener("DOMContentLoaded", ...) }` pattern — dead code on Pusha-loaded themes, kept defensively.',
@@ -1304,8 +1376,12 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
         const ln = lines[i];
         if (/<script[^>]*>/i.test(ln) && !/src=/i.test(ln) && !/application\/(ld\+)?json/i.test(ln)) {
           const entry = { file: relative(themePath, file), line: i + 1, match: ln.trim() };
-          if (pushaAware) suppressed.E.push({ bucket: 'E', ...entry, reason: 'file also calls window.Pusha.on*' });
-          else findings.E.push(entry);
+          const hookIssues = pushaAware ? hookRegistrationIssues(text) : [];
+          if (pushaAware && hookIssues.length === 0) {
+            suppressed.E.push({ bucket: 'E', ...entry, reason: 'file also calls window.Pusha.on*' });
+          } else {
+            findings.E.push(hookIssues.length ? { ...entry, suspect: hookIssues } : entry);
+          }
         }
       }
     }
@@ -1321,7 +1397,14 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
       const rel = relative(themePath, file);
       const body = (text.match(/\{%\s*javascript\s*%\}([\s\S]*?)\{%\s*endjavascript\s*%\}/) || [, ''])[1];
       if (kind === 'F2' && useWhitelists && WHITELISTS.F.bodyTest(body)) {
-        suppressed.F.push({ bucket: 'F', file: rel, kind, match: '{% javascript %}', reason: 'body is only sectionInits/sectionDestroy registrations — already ported' });
+        const issues = portedSectionIssues(text, rel);
+        if (issues.length === 0) {
+          suppressed.F.push({ bucket: 'F', file: rel, kind, match: '{% javascript %}', reason: 'body is only sectionInits/sectionDestroy registrations — already ported' });
+          continue;
+        }
+        // Shaped like a port, wired wrong. Worse than an untouched file,
+        // because it reads as finished.
+        findings.F.push({ file: rel, kind, suspect: issues });
         continue;
       }
       findings.F.push({ file: rel, kind });
@@ -1409,6 +1492,10 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
         findings.H.push({
           file: relative(themePath, file),
           reason: 'IIFE with no class — likely procedural state',
+          // The IIFE branch wins over the mutation branch, so without this the
+          // mutation is invisible downstream — and the bridge whitelist would
+          // suppress a file that really does hold top-level state.
+          alsoMutates: hasTopLevelWindowMutation,
           reachability: checkHReachability(themePath, file),
         });
       } else if (hasTopLevelWindowMutation) {
@@ -1452,6 +1539,29 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
   for (const f of findings.F) f.location = locationClass(f.file, shellRelSet);
   for (const f of findings.G) f.location = locationClass(f.file, shellRelSet);
   for (const f of findings.H) f.location = locationClass(f.file, shellRelSet);
+  if (useWhitelists) {
+    // Needs the location, so it runs here rather than at detection time. Shell
+    // module state persisting across navigations is the documented, intended
+    // behaviour for a bridge — flagging it on every ported theme trains agents
+    // to skim the one bucket where the dangerous findings live.
+    const keep = [];
+    for (const f of findings.H) {
+      const pushaAware = WHITELISTS.E.fileTest(readFileText(join(themePath, f.file)));
+      const isBridgeShape = f.location === 'shell' && pushaAware && WHITELISTS.H_shellBridge.reasonTest(f.reason);
+      if (isBridgeShape && !f.alsoMutates) {
+        suppressed.H.push({ bucket: 'H', ...f, match: f.reason, reason: 'bridge shape in a Pusha-aware shell file' });
+        continue;
+      }
+      if (isBridgeShape) {
+        // The IIFE is fine; the top-level mutation beside it is the finding.
+        // Re-label so the reason names what actually needs looking at.
+        keep.push({ ...f, reason: 'top-level window/document mutation beside a Pusha hook registration' });
+        continue;
+      }
+      keep.push(f);
+    }
+    findings.H = keep;
+  }
 
   // J — analytics surface. Needs shellRelSet: a marker in the persistent shell
   // is re-read on every nav, which is a different (worse) failure than a missing
@@ -2019,7 +2129,7 @@ const BUCKET_RULES = {
   X: 'Theme app extensions. Informational + advisory — an app\'s code cannot be mechanically transformed, so X inventories app surfaces and assigns each a swap-safety verdict routed by location. Two reports: X-surface lists every { "type": "@app" } declaration in a {% schema %}, split by container membership — a risk map that stays valid when the merchant installs something tomorrow, and it works with zero apps installed. X-placed recursively walks the blocks tree of every templates/*.json and sections/*.json plus config/settings_data.json -> current.blocks, and reports what is actually installed. Detection parses JSON and reads `type`: a text match misses the escaped `shopify:\\/\\/apps\\/` encoding Shopify writes into some template files, and would report the flagship product template as app-free. Verdicts: at-risk (app block inside the swap container), survives (app block in a section group), survives-verify (app embed — outside the container, but references into the swapped region go stale with no repair signal), opaque (Script Tag API — invisible statically). App embeds with disabled: true are ignored.',
 };
 
-function printAuditText(themePath, { findings, summary, suppressed, analyticsMarkers, appSurfaces, skillFreshness, whitelistsActive }) {
+function printAuditText(themePath, { findings, summary, suppressed, analyticsMarkers, appSurfaces, skillFreshness, whitelistsActive, manifest }) {
   const NL = '\n';
   let out = '';
   out += `# pusha audit${NL}`;
@@ -2341,7 +2451,7 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
     }
     out += NL;
 
-    out += `  H — canonical Pusha top-level mutation (sectionInits / sectionDestroy / config / bootstrap)${NL}`;
+    out += `  H — canonical Pusha top-level mutation, and the bridge IIFE in a Pusha-aware shell file${NL}`;
     if (suppressed.H.length === 0) {
       out += `    (no matches in this run)${NL}`;
     } else {
@@ -2369,7 +2479,34 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
     out += `  Pass --no-whitelist to disable all of the above and see raw findings.${NL}${NL}`;
   }
 
+  const suspects = Object.entries(findings)
+    .flatMap(([bucket, list]) => (Array.isArray(list) ? list : []).filter((f) => f.suspect?.length).map((f) => ({ bucket, ...f })));
+  if (suspects.length) {
+    out += `## ⚠ Looks ported, wired wrong${NL}`;
+    out += `  These carry the shape of a finished transform, so a whitelist nearly${NL}`;
+    out += `  suppressed them — but the wiring does not line up. That is worse than an${NL}`;
+    out += `  untouched file: it reads as done and is silently dead. Check each one.${NL}${NL}`;
+    for (const f of suspects) {
+      out += `  ${f.file}  [${f.bucket}]${NL}`;
+      for (const issue of f.suspect) out += `    · ${issue}${NL}`;
+    }
+    out += NL;
+  }
+
   out += `## Next steps${NL}`;
+  if (manifest) {
+    if (!manifest.honored) {
+      out += `  (--ignore-manifest: ${manifest.path} was not read — every finding is listed as unsettled)${NL}`;
+    } else if (!manifest.present) {
+      out += `  No ${manifest.path} yet. Record each finding id and its outcome there as you go;${NL}`;
+      out += `  later runs skip what is already judged instead of re-asking.${NL}`;
+    } else {
+      out += `  ${manifest.path}: ${manifest.recorded} recorded, ${manifest.settled} matched this run and are excluded below.${NL}`;
+      const stale = manifest.recorded - manifest.settled;
+      if (stale > 0) out += `  ${stale} recorded id(s) matched nothing — the file changed, or the finding is genuinely gone.${NL}`;
+    }
+    out += NL;
+  }
   out += `  This report is written to be worked by a coding agent. In --json every finding${NL}`;
   out += `  carries a stable \`id\` and an \`action\`, and \`queue\` lists the work in order.${NL}`;
   out += `  Install the rules it applies with: pusha skill --claude${NL}${NL}`;
@@ -2476,6 +2613,10 @@ const BUCKET_WORK_ORDER = ['K', 'F', 'E', 'G', 'M', 'L', 'D', 'H', 'J', 'X', 'C'
 const ACTION_WORK_ORDER = ['transform', 'decide', 'verify', 'none'];
 
 function actionFor(bucket, f) {
+  // Shaped like a port but wired wrong. Never `transform` — re-running the
+  // wrapper would not fix a handle that points at a root which does not exist.
+  // A human has to look.
+  if (Array.isArray(f.suspect) && f.suspect.length) return 'decide';
   // `head-config` is inert configuration in the persistent shell — the
   // remediation table says leave it alone, so it must not enter the queue.
   const routed = f.location === 'head-config' ? 'none' : 'transform';
@@ -2543,6 +2684,49 @@ function findingTouches(f, needle) {
   return Array.isArray(f.sites) && f.sites.some((site) => String(site.file ?? '').includes(needle));
 }
 
+// A port is long, gets interrupted, and has to survive Shopify shipping a new
+// Dawn. Finding ids are stable across the edits a port makes precisely so the
+// work already judged can be recognised on the next run — but only if something
+// reads the record. This does.
+//
+// The format is deliberately permissive: any line carrying a finding id and one
+// of the outcome words counts. Agents write prose around it, humans read it as
+// markdown, and neither has to match a schema.
+//
+//   - `1934fec07316` transformed — sections/hero.liquid
+//   - `ee618be529bc` skipped: Liquid tokens inside {% javascript %}
+//   - 3ff3b44c1c5f deferred (human declined)
+const MANIFEST_REL = '.pusha/MANIFEST.md';
+const MANIFEST_OUTCOMES = ['transformed', 'skipped', 'deferred'];
+
+function readManifest(themePath) {
+  const path = join(themePath, MANIFEST_REL);
+  const entries = new Map();
+  if (!existsSync(path)) return { path, present: false, entries };
+  for (const line of readFileText(path).split('\n')) {
+    const id = /\b([0-9a-f]{12}(?:-\d+)?)\b/.exec(line);
+    if (!id) continue;
+    const outcome = MANIFEST_OUTCOMES.find((o) => new RegExp(`\\b${o}\\b`, 'i').test(line));
+    if (!outcome) continue;
+    entries.set(id[1], outcome);
+  }
+  return { path, present: true, entries };
+}
+
+function applyManifest(findings, entries) {
+  let settled = 0;
+  for (const list of Object.values(findings)) {
+    if (!Array.isArray(list)) continue;
+    for (const f of list) {
+      const outcome = entries.get(f.id);
+      if (!outcome) continue;
+      f.settled = outcome;
+      settled++;
+    }
+  }
+  return settled;
+}
+
 function buildQueue(findings) {
   const flat = [];
   for (const [bucket, list] of Object.entries(findings)) {
@@ -2558,9 +2742,10 @@ function buildQueue(findings) {
     if (byFile) return byFile;
     return (a.f.line ?? 0) - (b.f.line ?? 0);
   });
-  // Only work belongs in the queue. action:none findings stay in `findings`
-  // for context but must never read as a task.
-  return flat.filter(({ f }) => f.action !== 'none').map(({ f }) => f.id);
+  // Only unfinished work belongs in the queue. action:none findings and
+  // anything the manifest already records stay in `findings` for context, but
+  // must never read as a task.
+  return flat.filter(({ f }) => f.action !== 'none' && !f.settled).map(({ f }) => f.id);
 }
 
 // Reads `--flag value` and `--flag=value`, and reports which argv entries it
@@ -2592,6 +2777,7 @@ async function runAudit(args) {
   const json = args.includes('--json');
   const full = args.includes('--full');
   const useWhitelists = !args.includes('--no-whitelist');
+  const useManifest = !args.includes('--ignore-manifest');
 
   const bucketArg = readFlagValue(args, '--bucket');
   const actionArg = readFlagValue(args, '--action');
@@ -2633,12 +2819,23 @@ async function runAudit(args) {
   result.skillFreshness = getSkillFreshness(themePath);
   assignFindingIds(result.findings);
 
+  const manifest = useManifest ? readManifest(themePath) : { path: join(themePath, MANIFEST_REL), present: false, entries: new Map() };
+  const settledCount = applyManifest(result.findings, manifest.entries);
+  result.manifest = {
+    path: relative(themePath, manifest.path),
+    present: manifest.present,
+    honored: useManifest,
+    recorded: manifest.entries.size,
+    settled: settledCount,
+  };
+
   if (json && filtering) {
     const slice = [];
     for (const [bucket, list] of Object.entries(result.findings)) {
       if (!Array.isArray(list)) continue;
       if (filter.buckets && !filter.buckets.includes(bucket)) continue;
       for (const f of list) {
+        if (f.settled) continue; // already judged — see .pusha/MANIFEST.md
         if (filter.actions && !filter.actions.includes(f.action)) continue;
         if (filter.file && !findingTouches(f, filter.file)) continue;
         slice.push({ bucket, ...f });
@@ -2657,6 +2854,7 @@ async function runAudit(args) {
       date: new Date().toISOString(),
       cliVersion: PACKAGE_VERSION,
       filter,
+      manifest: result.manifest,
       count: slice.length,
       actions: AUDIT_ACTIONS,
       findings: slice,
@@ -2675,6 +2873,7 @@ async function runAudit(args) {
       actions: AUDIT_ACTIONS,
       doNotTransform: DO_NOT_TRANSFORM,
       queue: buildQueue(result.findings),
+      manifest: result.manifest,
       findings: result.findings,
       summary: result.summary,
       suppressed: result.suppressed,
@@ -2688,6 +2887,7 @@ async function runAudit(args) {
         files: { description: WHITELISTS.files.description, items: WHITELISTS.files.items },
         H: { description: WHITELISTS.H.description, patterns: WHITELISTS.H.patterns.map((p) => ({ rule: p.rule.source, why: p.why })) },
         E: { description: WHITELISTS.E.description },
+        H_shellBridge: { description: WHITELISTS.H_shellBridge.description },
         F: { description: WHITELISTS.F.description },
         G: { description: WHITELISTS.G.description },
       },

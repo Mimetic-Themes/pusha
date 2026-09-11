@@ -123,6 +123,9 @@ whitelists: on (default — pass --no-whitelist to disable)
   Pass --no-whitelist to disable all of the above and see raw findings.
 
 ## Next steps
+  No .pusha/MANIFEST.md yet. Record each finding id and its outcome there as you go;
+  later runs skip what is already judged instead of re-asking.
+
   This report is written to be worked by a coding agent. In --json every finding
   carries a stable `id` and an `action`, and `queue` lists the work in order.
   Install the rules it applies with: pusha skill --claude
