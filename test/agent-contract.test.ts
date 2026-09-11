@@ -166,3 +166,53 @@ test('audit --help explains the contract without needing a theme', () => {
     assert.match(out, new RegExp(needle.replace(/[-[\]{}()*+?.\\^$|]/g, '\\$&')), `help documents ${needle}`);
   }
 });
+
+test('a finished port has an empty transform queue', () => {
+  // The tool's own success criterion. Before the E/F whitelists, a correctly
+  // ported section re-audited as F2 forever, so "done" was unreachable and the
+  // skill's validation step told agents to keep wrapping.
+  const j = audit(join(fixturesDir, 'ported-theme'));
+  const work = Object.values<any[]>(j.findings).flat().filter((f) => f.action === 'transform');
+  assert.deepEqual(
+    work.map((f) => `${f.bucket} ${f.file ?? f.definedIn}`),
+    [],
+    'a ported theme must present no mechanical work',
+  );
+
+  // And the suppression is visible, not silent.
+  assert.ok(j.suppressed.F.length >= 2, 'ported {% javascript %} bodies are listed as suppressed');
+  assert.ok(j.suppressed.E.length >= 1, 'the Pusha-aware bridge snippet is listed as suppressed');
+
+  // Portal sites already marked are done, not pending.
+  for (const f of j.findings.K ?? []) assert.equal(f.action, 'none');
+});
+
+test('the ported-shape whitelist is strict — stray procedural code still reports', () => {
+  // A body that registers AND does work on parse is not ported. Suppressing it
+  // would hide a real finding, which is the failure mode whitelists invite.
+  const tmp = mkdtempSync(join(tmpdir(), 'pusha-strict-'));
+  const theme = join(tmp, 'theme');
+  cpSync(join(fixturesDir, 'ported-theme'), theme, { recursive: true });
+  const hero = join(theme, 'sections', 'hero.liquid');
+  writeFileSync(
+    hero,
+    readFileSync(hero, 'utf8').replace(
+      '{% javascript %}',
+      "{% javascript %}\n  document.querySelector('.hero').classList.add('legacy');",
+    ),
+  );
+
+  const j = audit(theme);
+  const f2 = Object.values<any[]>(j.findings).flat().filter((f) => f.kind === 'F2');
+  assert.equal(f2.length, 1, 'the tampered body is reported again');
+  assert.equal(f2[0].file, 'sections/hero.liquid');
+  assert.equal(f2[0].action, 'transform');
+});
+
+test('--no-whitelist surfaces everything the whitelists hid', () => {
+  const clean = audit(join(fixturesDir, 'ported-theme'));
+  const raw = audit(join(fixturesDir, 'ported-theme'), '--no-whitelist');
+  const count = (j: any) => Object.values<any[]>(j.findings).flat().length;
+  assert.ok(count(raw) > count(clean), 'raw run shows more');
+  assert.equal(raw.suppressed.E.length + raw.suppressed.F.length, 0, 'nothing suppressed when off');
+});

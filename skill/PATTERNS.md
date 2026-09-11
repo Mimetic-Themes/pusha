@@ -14,13 +14,13 @@ The buckets:
 
 What `data-section-type` and `sectionInits[handle](root)` plug into. On every PJAX navigation Pusha runs this sequence:
 
-1. Same-origin link click intercepted (or `Pusha.go(url)` invoked programmatically). `data-no-transition` and modifier-key clicks fall through to native nav.
+1. Same-origin link click intercepted (or `Pusha.go(url)` invoked programmatically). `data-no-transition`, modifier-key clicks, `target="_blank"`, `download`, and the `SHOPIFY_RESERVED` routes fall through to native nav. `href="#"` and `href=""` are never intercepted at all — they are buttons, and the theme's own handler must see the click. A click on the URL you are already on scrolls to top rather than re-fetching.
 2. Dispatches `pjax:before-nav` (cancelable); fires `onBeforeNav` hooks.
-3. Fetches destination HTML — or serves from the hover-prefetch cache if warm. If a prefetch is still in flight, awaits it instead of firing a duplicate fetch.
-4. Fires `onBeforeLeave`, removes any `[data-pusha-cleanup]` portal-to-body elements, starts the leave transition.
+3. Fetches destination HTML — or serves from the hover-prefetch cache if warm. If a prefetch is still in flight, awaits it instead of firing a duplicate fetch. Capped by `config.timeout` (default 10s); on timeout, non-2xx, or a cross-origin redirect, `onNavError` fires and the browser performs a normal navigation. A same-origin redirect records the URL actually landed on, not the one clicked.
+4. Fires `onBeforeLeave`, closes any `[data-pusha-close-on-nav]` shell modals, removes any `[data-pusha-cleanup]` portal-to-body elements, starts the leave transition.
 5. Parses the new document. Runs `syncHeadScripts` + `syncHeadStyles` (preserving `type="module"`, `crossorigin`, `nonce`, etc.). Updates `<title>`, meta tags, `<body data-template>`.
-6. Replaces `#MainContent` (or whatever `containerSelector` resolves to). Browser upgrades any custom elements in the swapped subtree automatically.
-7. Calls `window.theme.initPage(newContainer)`, which:
+6. Runs cleanup with the outgoing nodes still connected — `window.theme.sectionDestroy[handle](root)` for each `[data-section-type]`, then `registry.destroyAll`. Then replaces `#MainContent` (or whatever `containerSelector` resolves to). Browser upgrades any custom elements in the swapped subtree automatically.
+7. Calls `window.theme.initPage()` — it takes no arguments and resolves the live container itself — which:
    - Runs `registry.setupGlobal()` once for any newly-registered components.
    - Walks `newContainer.querySelectorAll('[data-section-type]')` and calls `window.theme.sectionInits[handle](root)` for each match.
    - Fires `onAfterSwap` → `onAfterInit` hooks and the legacy `pjax:content-swap` event.
@@ -32,7 +32,8 @@ What this implies for wrappers:
 - `sectionInits[handle]` re-fires for **every matching root** on the page (a section may appear multiple times) and for **every PJAX swap** — plus the theme editor's `shopify:section:load`. Bodies must be idempotent via `data-initialized` guards.
 - The function takes one `root` argument. Never `document.querySelector` — always `root.querySelector` so the same handle handles multiple instances on a single page.
 - The JS file itself loads only once across the session. Module-level state survives across navs; if you need per-handle one-shot initialization (e.g. attaching a delegated document listener), guard it with `window.theme.__inits[handle]`.
-- Theme editor lifecycle: idempotency requirements dovetail with Shopify's `shopify:section:load` / `shopify:section:unload`. Any `sectionInits[handle](root)` body must be safe to call on replace, not just on PJAX nav.
+- Theme editor lifecycle: idempotency requirements dovetail with Shopify's `shopify:section:load` / `shopify:section:unload`. Any `sectionInits[handle](root)` body must be safe to call on replace, not just on a swap.
+- ⚠ **The theme editor is not a test for cleanup or for app behaviour.** It runs the same teardown a swap does and full-reloads on theme app extension changes, so broken cleanup and inert app blocks both look correct there. Verify on the storefront across a real navigation, with `debug: true`.
 
 ### Hook registration is order-independent (Path A adapters)
 
@@ -63,6 +64,86 @@ Recommended adapter shape:
 ```
 
 The `else` branch is a defensive fallback for the rare case where the adapter loads but the runtime didn't (debug builds, partial installs). On any normal Pusha install, the `if (window.Pusha)` branch is the only one that runs.
+
+---
+
+## Routing by location — read this before any E / F2 / G / H transform
+
+**A bucket says what the script is. A location says where it runs. The fix comes from both.**
+
+Every E, F2, G and H finding carries a `location` — in `--json` as the `location`
+field, in the text report as a `[tag]` after the match. It is not advisory. The
+same procedural script becomes four different transforms depending on where it
+sits, and one of those transforms is "leave it alone".
+
+Wrapping everything in `sectionInits` is the single most damaging thing a worker
+can do here. `runInitPage()` walks `[data-section-type]` **inside the swap
+container only**. A handle registered for anything outside it never executes —
+not on the first load, not ever. The theme looks fine until the feature is used.
+
+If a finding's location is not listed below, or you cannot tell which applies,
+return `SKIP` and surface it. Do not guess.
+
+### `section`
+
+A file under `sections/` that is NOT rendered from the layout. Lives inside the swap container, so `sectionInits` re-fires for it on every navigation.
+
+- **E** — sectionInits['<handle>'] = (root) => {…}; scope queries to root.
+- **F2** — sectionInits['<handle>'] = (root) => {…}; scope queries to root.
+- **G** — Move the handler body into sectionInits['<handle>'](root). DOMContentLoaded does not re-fire after a swap.
+- **H** — Module-level state in a section — check reachability; move state into the sectionInits closure or a custom element.
+
+### `block`
+
+A file under `blocks/`. Theme blocks have no per-block init registry — there is no `blockInits`. The browser is the only thing that re-mounts them.
+
+- **E** — Promote to a custom element (connected/disconnectedCallback) — blocks have no per-block init registry.
+- **F2** — Promote to a custom element (connected/disconnectedCallback) — blocks have no per-block init registry.
+- **G** — Move into the custom element's connectedCallback.
+- **H** — Module-level state — move into the custom element instance.
+
+### `template`
+
+An inline script in `templates/*.liquid`. Inside the container, but with no section root to hang a handle on.
+
+- **E** — Move to a custom element, or an onAfterInit((c,meta)=>…) hook keyed on meta.template.
+- **F2** — Move to a custom element, or an onAfterInit((c,meta)=>…) hook keyed on meta.template.
+- **G** — Move into a custom element or an onAfterInit hook.
+- **H** — Module-level state — move into a custom element (page-scoped).
+
+### `shell`
+
+`layout/*.liquid`, or any snippet or section rendered from the layout — header, footer, cart drawer. **This DOM is never replaced.** `sectionInits` is never walked here, so a handle registered for it never runs at all.
+
+- **E** — Global/shell scope — run once via onFirstLoad / setupGlobal. NOT sectionInits (it never re-fires here).
+- **F2** — Global/shell scope — run once via onFirstLoad / setupGlobal. NOT sectionInits (it never re-fires here).
+- **G** — Replace with onFirstLoad (runs once). DOMContentLoaded also never re-fires after a swap.
+- **H** — Shell module state persists across navs — usually intended, but verify it should not reset per page.
+
+### `include`
+
+A snippet under `snippets/` that the audit could not prove is shell-rendered. Render context decides the answer — check where it is rendered from before transforming.
+
+- **E** — Included snippet — verify render context; wrap as a custom element (or sectionInits if always inside a section).
+- **F2** — Included snippet — verify render context; wrap as a custom element (or sectionInits if always inside a section).
+- **G** — Verify render context; move into a custom element or the appropriate lifecycle hook.
+- **H** — Verify render context; module-level closures do not replay on swap.
+
+### `asset`
+
+A file under `assets/`. Loaded once per document by a `<script src>` tag; the module body does not re-execute on a swap.
+
+- **E** — Global asset script — move init into onFirstLoad or a custom element.
+- **F2** — Global asset script — move init into onFirstLoad or a custom element.
+- **G** — Global asset — replace DOMContentLoaded with onFirstLoad, or move into a custom element.
+- **H** — Module-level state in a shared asset — closures do not replay on swap; refactor to instance/registry state.
+
+### `head-config`
+
+An inline script with no call expressions — a config object literal. Runs once in the persistent shell and is read at parse time by other scripts.
+
+- **E** — Leave as-is — inert config (no calls), runs once in the persistent shell, safe across swaps.
+- **F2** — Leave as-is — inert config (no calls), runs once in the persistent shell, safe across swaps.
 
 ---
 
@@ -171,11 +252,16 @@ class StickyHeader extends HTMLElement {
 
 ## E. Procedural inline `<script>` in section/snippet — **wrap**
 
+> **Routed by location.** The pattern below is the `section` case. For `block`,
+> `template`, `shell`, `include`, `asset` or `head-config`, use
+> [Routing by location](#routing-by-location--read-this-before-any-e--f2--g--h-transform)
+> — the fix is different, and for `shell` and `asset` `sectionInits` does not run at all.
+
 ### Detect
 `<script>` tag without `src` attribute, not `type="application/json"`, inside a `.liquid` file under `sections/` or `snippets/`. Contains executable code that runs at parse time.
 
 ### Why broken
-Inline scripts run once on initial page parse. After a PJAX swap, the new section's inline script is parsed but the browser will not execute injected `<script>` tags inserted via `innerHTML`. Even if `syncHeadScripts` covered them (it doesn't — it only handles `<head>`), they'd re-run with stale closures.
+Inline scripts run once on initial page parse. After a PJAX swap, the new section's inline script is parsed but the browser will not execute injected `<script>` tags inserted via `innerHTML`. `syncHeadScripts` does scan the whole fetched document, not just `<head>` — but it only re-injects `script[src]`, and an inline script has no `src`. Nothing re-executes it.
 
 ### Transform
 1. Add `data-section-type="<handle>"` to the section's root element. Use the section file's basename (without `.liquid`) as the handle.
@@ -226,7 +312,7 @@ Inline `<script>` tags injected via PJAX swap (innerHTML / replaceWith) **do not
 
 These come from Shopify's documented section-tag rules. Workers MUST NOT violate them:
 
-1. **One `{% javascript %}` tag per section/snippet file.** Multiple tags in one file are invalid. If a section already has a `{% javascript %}` block, the worker must either:
+1. **One `{% javascript %}` tag per section, block or snippet file.** Multiple tags in one file are invalid. If a section already has a `{% javascript %}` block, the worker must either:
    - Append the wrapped logic to the existing block (preserving its scope and order), OR
    - Return SKIP and let a human merge them. *Appending is safe only when the existing block's code doesn't conflict with the wrapper structure. When in doubt, SKIP.*
 
@@ -299,6 +385,11 @@ DEFERRED: assets/customer.js (referenced from sections/main-addresses.liquid)
 
 ## F. `{% javascript %}` block — **wrap (unless custom element)**
 
+> **Routed by location.** The pattern below is the `section` case. For `block`,
+> `template`, `shell`, `include`, `asset` or `head-config`, use
+> [Routing by location](#routing-by-location--read-this-before-any-e--f2--g--h-transform)
+> — the fix is different, and for `shell` and `asset` `sectionInits` does not run at all.
+
 ### Detect
 `{% javascript %}` … `{% endjavascript %}` tags inside a `.liquid` file.
 
@@ -309,11 +400,16 @@ DEFERRED: assets/customer.js (referenced from sections/main-addresses.liquid)
 **F2. Procedural code** — same transformation as bucket E.
 
 ### Why F1 is safe
-`{% javascript %}` blocks are concatenated into `scripts.js`, served from `<head>` as deferred. `syncHeadScripts` loads new ones on PJAX nav. The `customElements.define` call only registers a class globally; subsequent definitions of the same tag name are no-ops. So the class is defined once and used every time the element appears, including after PJAX swaps.
+`{% javascript %}` blocks are concatenated into `scripts.js`, served from `<head>` as deferred. `syncHeadScripts` loads new ones on PJAX nav. The `customElements.define` call registers the class globally, once. F1 is safe because `syncHeadScripts` dedupes by absolute URL, so each script executes exactly once per document — **not** because redefinition is harmless. Calling `define` twice for one tag name throws. If a `define` ever ends up somewhere re-executable, guard it with `if (!customElements.get('my-tag'))`.
 
 ---
 
 ## G. `DOMContentLoaded` handler — **wrap**
+
+> **Routed by location.** The pattern below is the `section` case. For `block`,
+> `template`, `shell`, `include`, `asset` or `head-config`, use
+> [Routing by location](#routing-by-location--read-this-before-any-e--f2--g--h-transform)
+> — the fix is different, and for `shell` and `asset` `sectionInits` does not run at all.
 
 ### Detect
 ```regex
@@ -432,7 +528,7 @@ Options 3 and 4 are escalations from those defaults, not first choices.
 
 ### Common false-positive shapes — bucket H triages as "no action"
 
-Some H findings are structurally similar to whitelisted Pusha patterns but aren't covered by the whitelist's regex. The audit deliberately doesn't try to anticipate every "stateless namespace" shape — false-positive *suppression* would risk hiding real H findings, so confirmation is the agent's job during triage. When confirmed safe, record the verdict in `pusha-diffs/<theme>/MANIFEST.md` so the next audit pass has a baseline.
+Some H findings are structurally similar to whitelisted Pusha patterns but aren't covered by the whitelist's regex. The audit deliberately doesn't try to anticipate every "stateless namespace" shape — false-positive *suppression* would risk hiding real H findings, so confirmation is the agent's job during triage. When confirmed safe, record the verdict in `.pusha/MANIFEST.md` so the next audit pass has a baseline.
 
 Known shapes that audit-as-H but typically triage as Option 1 (global + idempotent, no transform):
 
@@ -445,7 +541,7 @@ window.ProductModel = {
 ```
 Triage steps: confirm no closure-local state, confirm methods are safe to re-call. Record as resolved-no-action.
 
-**Top-level Pusha hook registration.** `window.Pusha.onAfterSwap(boot)` or `window.Pusha.onFirstLoad(boot)` called at module scope, with `boot` responsible for its own idempotency. Same triage — confirm `boot` is re-entrant, record as resolved-no-action. (The G whitelist already covers the typical `addEventListener('DOMContentLoaded', ...)` fallback alongside these registrations; the registration line itself fires H.)
+**Top-level Pusha hook registration.** `window.Pusha.onAfterSwap(boot)` or `window.Pusha.onFirstLoad(boot)` called at module scope, with `boot` responsible for its own idempotency. Same triage — confirm `boot` is re-entrant, record as resolved-no-action. (The E and G whitelists cover these files entirely — a file calling `window.Pusha.on*` has its inline-script and DOMContentLoaded findings suppressed. The registration line itself does **not** fire H: the H pre-filter matches only column-0 `window.X =` shapes, so an indented hook call never reaches triage.)
 
 These patterns will keep showing up on every audit — that's intentional. The skill's job is to recognize them and document the verdict, not to expand the whitelist to make them disappear. The audit's signal is "human glanced at it"; the MANIFEST records that the glance happened.
 
@@ -516,7 +612,7 @@ Each L finding gets a sub-letter matching the taxonomy categories in `reference-
 | **L-E** | Section/block reading per-page objects (`product`, `collection`, `article` inside a header/footer section) | Query user — either move the section into the main container or section-refetch | 🟠 Query user |
 | **L-F** | Personalization (`recommendations.*`, `predictive_search.*` in header/footer) | Predictive search is already Ajax-driven; recommendations in persistent shell = section-refetch | 🟠 Query user |
 | **L-G** | Time-of-render (`'now' | date`, `'today' | date`) | Cosmetic (footer year): leave. Logic-bearing (countdowns): rewrite in JS | 🟢 No action (cosmetic) / 🔴 Defer (logic) |
-| **L-H** | App-injected blocks reading per-page state (`{% content_for 'block' %}` in header/footer; theme app extension blocks reading `request`/`product`/`cart`) | Re-dispatch a route-change event the app block can listen for; Pusha's existing `pjax:content-swap` event already carries `url`/`template` detail | 🟠 Query user |
+| **L-H** | App-injected blocks reading per-page state (`{% content_for 'block' %}` in header/footer; theme app extension blocks reading `request`/`product`/`cart`) | The sanctioned channel is `shopify:page:view` (Standard storefront events), which Pusha re-dispatches on every swap and which is what an app vendor should be asked to listen for. `pjax:content-swap` is Pusha-specific and no app knows it exists | 🟠 Query user |
 
 ### Transform
 
@@ -524,7 +620,7 @@ Bucket L doesn't have one mechanical transformation like buckets E/F/G. The acti
 
 **1. Client-side re-derive (covers L-A and the URL-derived majority).**
 
-Use Pusha's built-in `initActiveLinks` instead of hand-rolling the loop. It already wires `onAfterSwap`, syncs the body `template-*` class, and walks any `[data-pusha-active-links]` container to toggle per-link state — both with sensible defaults AND with per-element overrides for themes whose CSS already uses theme-specific active-state class names.
+Use Pusha's built-in active-link handling instead of hand-rolling the loop. **On Path A (the drop-in bundle) it already runs — there is nothing to import or call.** The snippet below is Path B only. It already wires `onAfterSwap`, syncs the body `template-*` class, and walks any `[data-pusha-active-links]` container to toggle per-link state — both with sensible defaults AND with per-element overrides for themes whose CSS already uses theme-specific active-state class names.
 
 ```js
 import { initActiveLinks } from '@mimeticthemes/pusha/active-links';
@@ -569,12 +665,17 @@ Scope resolution for `data-pusha-child-active-class`: nearest `<details>` ancest
 Themes opt in by tagging their nav containers: `<nav data-pusha-active-links>...</nav>`. The skill adds this attribute during the port and replaces `link.current` / `link.child_active` Liquid conditionals with structural class names the helper toggles.
 
 **2. Section Rendering API refetch (covers L-B, L-E, L-F, L-H — anything not URL-derived).**
-
-Mark a persistent section with `data-island-on-nav` (extending the existing `data-island` semantics outward) so Pusha refetches it via `/path?sections=section-id` on every PJAX nav and morphs the result into the existing DOM. Cost: one extra request per nav per island. Use sparingly — for the cart-count badge, customer welcome message, or app blocks reading per-page state.
+~~Mark a persistent section for per-navigation refetch.~~ **There is no such
+attribute.** `data-island-on-nav` was never implemented; `src/islands.ts`
+matches `[data-island][data-section-id]` only, inside the swapped container,
+and revalidates only when the page HTML came from the prefetch cache. Marking a
+shell region with it does nothing at all, silently. Use option 1 (derive the
+value in JS on `onAfterSwap`) or option 3 (`data-no-transition` to force a full
+load at that boundary) instead.
 
 **3. Mark as reload boundary.**
 
-For L-B auth flows specifically: add the relevant route to `data-no-transition` (the skill's bucket H/K escape hatch) so the link forces a full nav, refreshing the persistent shell's `customer.*` state. Pusha already excludes `/account/login`, `/account/register`, `/account/logout`, `/account/recover`, `/account/activate`, `/customer_authentication/*`, `/localization` from PJAX (`SHOPIFY_RESERVED` in `src/runtime.ts`).
+For L-B auth flows specifically: add the relevant route to `data-no-transition` (the skill's bucket H/K escape hatch) so the link forces a full nav, refreshing the persistent shell's `customer.*` state. Pusha already excludes these from interception — the authority is `SHOPIFY_RESERVED` in `src/routes.ts`, shared by link interception and prefetch so the two cannot disagree. It currently covers `/checkout(s)`, the `/account/*` auth routes, `/customer_authentication/*`, `/password`, `/localization`, `/gift_card(s)`, the app proxy `/a/*`, and the GET routes that mutate cart state (`/cart/add`, `/cart/change`, `/cart/update`, `/cart/clear`, cart permalinks) plus `/discount/*`. Read the regex rather than trusting this list.
 
 ### Audit output
 
@@ -586,9 +687,9 @@ Bucket L findings render with the sub-letter and rank visible, so the orchestrat
   by request-scope type (A=URL, B=customer, C=cart, D=locale, E=per-page
   section, F=personalization, G=time, H=app-injected).
 
-  layout/theme.liquid:14   [L-A 🟡 auto]   <body class="template-{{ template.name }}">
-  layout/theme.liquid:8    [L-A 🟡 auto]   <link rel="canonical" href="{{ request.origin }}{{ request.path }}">
-  sections/header.liquid:42  [L-A 🟡 auto]  {% if link.current %} ... {% endif %}
+  layout/theme.liquid:14   [L-A auto]   <body class="template-{{ template.name }}">
+  layout/theme.liquid:8    [L-A auto]   <link rel="canonical" href="{{ request.origin }}{{ request.path }}">
+  sections/header.liquid:42  [L-A auto]  {% if link.current %} ... {% endif %}
   sections/header.liquid:18  [L-B 🟠 ask]   {% if customer %} ... {% endif %}
   sections/header.liquid:55  [L-C 🟢 ok]    {{ cart.item_count }} — confirm cart:mutated wired
   sections/footer.liquid:88  [L-G 🟢 ok]    {{ 'now' | date: '%Y' }} (cosmetic — leave)
@@ -705,13 +806,165 @@ When in doubt, leave it unmarked. Opt-in is the safe default.
 
 ---
 
+## K. Portal-to-body custom element — **mark every render site**
+
+### Detect
+
+The audit resolves the class hierarchy for you. A K finding names the tag, the
+class, the file that defines it, and every render site.
+
+### Why broken
+
+The element's `connectedCallback` calls `document.body.appendChild(this)`, which
+moves it **out of the swap container**. The container is then replaced and the
+portaled node survives, orphaned, holding listeners that point at DOM which no
+longer exists. Dawn's `<modal-dialog>` via `ModalDialog` is the canonical case.
+They accumulate one per navigation.
+
+### Transform — mechanical
+
+Add `data-pusha-cleanup` to **every render site the audit lists**, not to the
+class definition. Pusha removes marked nodes before each leave.
+
+```liquid
+<modal-dialog data-pusha-cleanup>
+```
+
+A site the audit already marks `✓ already marked` is done — leave it. If every
+site is marked, the finding carries `action: none` and there is no work.
+
+### Never
+
+Do not add the attribute to an element that portals deliberately and must
+survive navigation — a cart drawer that stays open across pages. The audit
+cannot tell those apart; if the element is something the buyer expects to
+persist, `SKIP` and surface it.
+
+---
+
+## J. Analytics surface — **read, then hand to the human**
+
+Every J finding is `action: decide`. Nothing here is mechanically transformable,
+and one plausible-looking "fix" actively breaks a working pixel.
+
+### The one rule that matters
+
+**Never migrate a raw pixel into Customer Events.** A `gtag` / `fbq` /
+`dataLayer.push` / `ttq` call sitting in theme code is, under Pusha, among the
+*most* likely things to keep working — the theme can re-fire it directly.
+Customer Events is the one channel Pusha cannot reach: standard event names are
+fenced from theme-side publishing, so moving a working pixel there kills it.
+Earlier guidance said the opposite; it was wrong.
+
+### Transform — refire from a hook, in place
+
+```js
+import { onAfterInit } from '@mimeticthemes/pusha/hooks';
+onAfterInit(() => {
+  window.gtag?.('event', 'page_view', { page_location: location.href });
+  window.dataLayer?.push({ event: 'virtualPageView' });
+  window.fbq?.('track', 'PageView');
+});
+```
+
+Which events a given store actually needs is a merchant decision, which is why
+this is `decide` and not `transform`. Surface the call sites, propose the hook,
+let the human confirm the event list.
+
+### What the audit reports
+
+`gap` findings are missing `data-pusha-analytics-event` markers; `advisory`
+findings are raw pixel call sites. Neither makes app pixels work — see the
+README's Analytics section for what is and is not reachable.
+
+---
+
+## P. Partials — **informational, no diff**
+
+`{% partial %}` / `@shopify/partial-rendering` regions in new-Liquid themes. The
+audit inventories them and maps each partial to its consumers. The partial name
+is a load-bearing string contract: renaming a declaration breaks every consumer.
+
+There is no transform. Produce no diff. If a partial region overlaps the swap
+container, surface it — coordinating Pusha's swap with the platform's own
+`partials.apply()` is an open question, not a pattern.
+
+---
+
+## X. Theme app extensions — **you do not own this code**
+
+### The measured result
+
+Four soft navigations on a real storefront against a purpose-built extension,
+one variant per loading shape. Exactly two shapes recover, both with no
+configuration and no double-init:
+
+| App block shape | Result |
+|---|---|
+| Listens for `shopify:page:view` | recovers every navigation |
+| Authored as a custom element | recovers every navigation |
+| Schema-attribute JS, inline `<script>`, in-markup `<script src>`, `type="module"` | all inert, identically |
+
+The loading shape makes no difference. What matters is whether the block has a
+re-init hook at all.
+
+### Transform — none. Ever.
+
+You cannot wrap code you did not write, and the canonical case is not even in
+the markup: the `javascript` schema attribute makes Shopify inject a
+`<script async>` into the rendered page's head, per request, deduped. There is
+nothing in the swapped HTML to transform.
+
+- **If the merchant owns the app** — the fix belongs in the app: listen for
+  `shopify:page:view`, or author the block as a custom element. Both are
+  documented and supported. Write this up for the human to send the vendor.
+- **If they do not** — opt the surrounding navigation out with
+  `data-no-transition`, or treat the page as ineligible for instant navigation.
+
+### Never enable `appCompat` on an agent's initiative
+
+`appCompat.sectionEvents` and `appCompat.reexecuteExtensionScripts` both ship
+off. `reexecuteExtensionScripts` is **measured harmful**: re-executing a bundle
+adds an execution rather than replacing one, and over 4 navigations a variant
+holding one listener finished with five, firing all five per click. Enabling
+both compounds multiplicatively. These exist to be measured, not switched on. If
+an agent finds them in `types.ts`, that is not permission.
+
+---
+
+## Never transform these
+
+Independent of bucket. If a finding points into any of the following, return
+`SKIP` with the reason and let the human decide:
+
+- **`cdn.shopify.com/extensions/` script tags** and anything under bucket X —
+  app code you do not own.
+- **`{% content_for 'block' %}` / `{% content_for 'blocks' %}` output** and app
+  block bodies inside `sections/apps.liquid` — rendered by the platform.
+- **`{{ content_for_header }}`** — Shopify's own injection point. Never move,
+  wrap, defer, or reorder it.
+- **Vendored libraries in `assets/`** — jQuery, Swiper, Flickity and friends
+  will land in bucket H because of their IIFE wrapper. That is a false positive;
+  the library is not the problem, its call sites are.
+- **`layout/theme.liquid` structure** — `pusha init` owns the render tag and the
+  container attributes. Add nothing else to the layout without asking.
+- **Anything the audit marks `action: none`** — including every `head-config`
+  finding. An inert config object moved inside a function stops existing at
+  parse time, and the scripts reading it break.
+
+---
+
 ## Section handle derivation
 
 For sections, use the filename without extension: `sections/announcement-bar.liquid` → `announcement-bar`.
 
 For snippets included inside sections, the handle is the *including section's* handle. Snippets don't get their own `data-section-type` — they piggyback on the parent section's root and init function.
-
-Exception: if a snippet is rendered standalone (e.g. `cart-drawer.liquid` rendered in `theme.liquid` outside `#MainContent`), it gets its own handle and lives outside the PJAX swap container entirely — its init runs once on first load and never again.
+A snippet rendered **outside** `#MainContent` — from `layout/theme.liquid`, or
+from a section group that sits outside the container — is shell scope. It is
+never swapped, and `sectionInits` is never walked there. Giving it a handle
+registers a function that never runs. Use `onFirstLoad` / `setupGlobal` for its
+one-time setup, and delegated listeners on `document` for behaviour that must
+survive navigation. See [Routing by location](#routing-by-location--read-this-before-any-e--f2--g--h-transform) → `shell`.
 
 ---
 
@@ -769,6 +1022,12 @@ document.dispatchEvent(new CustomEvent('cart:mutated', {
 
 Audit step:
 
+0. **Grep for `shopify:cart:` first.** The runtime ships `standardCartEvents: true`
+   (`src/cart.ts`), which already re-dispatches Shopify's standard cart events as
+   `cart:mutated` with `source: 'shopify-standard-events'`. A theme that emits
+   `shopify:cart:lines-update` and friends **needs no bridge at all** — adding one
+   produces two `cart:mutated` per interaction and every subscribed handler
+   refetches twice. Skip straight to "no bridge required".
 1. **Grep for `cart:mutated`** in `assets/`, `sections/`, `snippets/`, `layout/`. If found → bridge already wired, skip.
 2. **Grep for cart mutation entry points** — most themes have one or more of:
    - `routes.cart_add_url`, `/cart/add.js`, `/cart/update.js`, `/cart/change.js`, `/cart/clear.js` in fetch calls
@@ -780,7 +1039,25 @@ Audit step:
 
 ### Variant 1 — pubsub bridge (themes shipping `assets/pubsub.js`)
 
-The theme already has `pubsub.js` exposing `subscribe()` and `publish()` as globals, plus `PUB_SUB_EVENTS` from `constants.js` (`cartUpdate`, `quantityUpdate`, `variantChange`, `cartError`). Bridge it once on `DOMContentLoaded`:
+The theme already has `pubsub.js` exposing `subscribe()` and `publish()` as globals, plus `PUB_SUB_EVENTS` from `constants.js` (`cartUpdate`, `quantityUpdate`, `variantChange`, `cartError`). Bridge it once.
+
+**Bind through `onFirstLoad`, not `DOMContentLoaded`.** A bridge snippet lives in
+the shell, so a raw `DOMContentLoaded` handler re-audits as a `G [shell]` finding
+on the next pass and an agent will dutifully "fix" the thing you just wrote. The
+shape below is what the G whitelist recognises (`window.Pusha.on*` in the same
+file), so the bridge stays invisible to later audits:
+
+```js
+(function () {
+  function bind() { /* subscribe(...) → document.dispatchEvent(cart:mutated) */ }
+  window.Pusha ? window.Pusha.onFirstLoad(bind)
+               : document.addEventListener('DOMContentLoaded', bind);
+})();
+```
+
+The fallback branch matters: deferred scripts execute in document order, so a
+bridge that loads before `pusha.min.js` would see `window.Pusha` undefined and
+silently never bind.
 
 ```liquid
 {# snippets/pusha-bridges.liquid — rendered from layout/theme.liquid after pubsub.js #}
@@ -838,11 +1115,18 @@ App-block scripts that mutate the cart (e.g. an upsell app that does its own `/c
 
 ### Audit bucket
 
-Cart-state integration is **not a script bucket** (A–H, K) — it's a cross-cutting concern flagged in the audit's "Bridges" or "Integration points" section. Bucket J now ships and covers the *analytics* surface specifically (event coverage, payload conformance, marker placement, raw pixels); cart-state still needs its own letter when the audit expands.
+Cart-state integration is **not a script bucket** (A–H, K, and the surface buckets J/L/M/P/X) — it's a cross-cutting concern flagged in the audit's "Bridges" or "Integration points" section. Bucket J now ships and covers the *analytics* surface specifically (event coverage, payload conformance, marker placement, raw pixels); cart-state still needs its own letter when the audit expands.
 
 ---
 
 ## Whitelists — what they hide, when to refresh trust
+
+Five are active: `files`, `E`, `F`, `G` and `H`, plus an unconditional `L`
+whitelist that `--no-whitelist` does **not** disable. `E` and `F` are the ones
+that make a finished port readable — they suppress the shapes this skill tells
+you to write, so a correctly ported theme reports no transform work. Everything
+suppressed is listed under `## Suppressed by whitelists` in the text report and
+in `suppressed` in `--json`; nothing is hidden silently.
 
 The audit ships three whitelists. Each suppresses a class of false positives that would otherwise clutter every run on a Pusha-aware theme. They're listed in `WHITELISTS` inside `bin/pusha.js` and surfaced in two places in the audit output:
 

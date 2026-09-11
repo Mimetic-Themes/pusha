@@ -99,6 +99,10 @@ whitelists: on (default — pass --no-whitelist to disable)
     drop /^window\.theme\.sectionInits\[/  (individual sectionInits registration)
     drop /^window\.theme\.sectionDestroy\[/  (individual sectionDestroy registration)
     drop /^window\.theme\.config\s*=/  (Pusha runtime config)
+  E — Suppress E findings (inline <script>) in files that also call window.Pusha.on* hooks. The script has already been ported — it registers through the runtime instead of running procedurally on parse. Without this, the bridge snippets this skill tells you to write re-report as findings on the next pass, and an agent "fixes" the thing it just wrote.
+    skip a file's E findings if it also calls window.Pusha.on*
+  F — Suppress F2 findings whose {% javascript %} body contains nothing but sectionInits / sectionDestroy registrations. That IS the ported shape. Without this a correctly ported section reports as work forever, and the audit can never say a port is finished.
+    skip an F2 whose {% javascript %} body is only sectionInits/sectionDestroy registrations
   G — Suppress G findings (DOMContentLoaded handlers) in files that also call window.Pusha.on* hooks. These are typically the "fallback" branch of an `if (window.Pusha) { ... } else { addEventListener("DOMContentLoaded", ...) }` pattern — dead code on Pusha-loaded themes, kept defensively.
     skip a file's G findings if it also calls window.Pusha.on*
   Pass --no-whitelist to disable all of the above and see raw findings.

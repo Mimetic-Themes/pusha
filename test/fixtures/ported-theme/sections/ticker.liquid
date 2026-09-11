@@ -1,0 +1,12 @@
+<div class="ticker" data-section-type="ticker"></div>
+
+{% javascript %}
+  window.theme.sectionInits['ticker'] = function (root) {
+    root.dataset.timer = setInterval(function () {
+      root.textContent = String(Date.now());
+    }, 1000);
+  };
+  window.theme.sectionDestroy['ticker'] = function (root) {
+    clearInterval(Number(root.dataset.timer));
+  };
+{% endjavascript %}
