@@ -585,7 +585,9 @@ Sections that prefer the `{% javascript %}` block can register without importing
 {% endjavascript %}
 ```
 
-For cleanup, optionally register `window.theme.sectionDestroy[handle]`.
+For cleanup, optionally register `window.theme.sectionDestroy[handle]`. It runs with the outgoing section still connected, immediately before the container is replaced, and again on `shopify:section:unload`. Use it for observers, intervals and listeners on `window` — anything holding a reference that outlives the DOM it points at. A custom element's `disconnectedCallback` is still the better answer where the markup allows one; `sectionDestroy` exists for sections that can't become custom elements.
+
+A handler that throws is caught and logged; it never aborts the navigation.
 
 ### Lifecycle hooks
 
@@ -895,6 +897,8 @@ Pusha disables instant nav inside the theme editor (`window.Shopify.designMode =
 | `shopify:section:select` | Re-runs `registry.initAll(target)`. |
 
 Sections written to be re-init-safe under page swaps work for the theme editor automatically.
+
+⚠ The editor is not a test for cleanup. It calls the same teardown as a swap, so a section whose cleanup is broken can still look correct here — verify on the storefront across a real navigation, with `debug: true` on.
 
 ---
 

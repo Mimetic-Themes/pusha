@@ -103,12 +103,21 @@ export class ComponentRegistry {
 
   destroyAll(root: HTMLElement): void {
     let destroyed = 0;
-    this.components.forEach((component) => {
-      if (component.destroy) {
+    let failed = 0;
+    this.components.forEach((component, name) => {
+      if (!component.destroy) return;
+      // Cleanup runs mid-navigation, with the old container still connected and
+      // the new one already fetched. A throw here must not abort the swap or
+      // skip the components after it — the page would be left half-torn-down.
+      try {
         component.destroy(root);
         destroyed++;
+      } catch (err) {
+        failed++;
+        console.warn(`[pusha] component "${name}" destroy() threw`, err);
       }
     });
+    if (failed) console.warn(`[pusha] ${failed} component(s) failed to clean up`);
     if (destroyed) dlog('registry', `destroyAll: ${destroyed} components`);
   }
 
