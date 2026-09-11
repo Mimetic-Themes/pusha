@@ -232,7 +232,7 @@ analytics: {
   shopify: true,            // Shopify.analytics.page() — classic themes (default true)
   customEvents: true,       // prefixed custom events → companion pixel (default true)
   trekkie: false,           // ShopifyAnalytics.lib.page() → admin reporting (default FALSE)
-  standardEvents: 'auto',   // @shopify/standard-events PageViewEvent (new-Liquid; default 'auto')
+  standardEvents: 'auto',   // shopify:page:view — app compatibility, NOT analytics (default 'auto')
   ga4: false,               // direct gtag.js page_view               (default false)
   dataLayer: false,         // GTM dataLayer push                     (default false)
 }
@@ -354,19 +354,99 @@ analytics: { dataLayer: { event: 'pageview', site_section: 'storefront' } }  // 
 
 Add a History-Change or Custom-Event trigger in GTM for the event name you push.
 
-### 4. Standard Events (new-Liquid themes) — `'auto'` by default
+### 4. Standard storefront events — **not an analytics channel**
 
-New-Liquid themes report their generic pageview as a `PageViewEvent` dispatched through [`@shopify/standard-events`](https://shopify.dev/docs/api/web-pixels-api/standard-events), fired once on `DOMContentLoaded`. That never re-fires on a PJAX swap, so the pageview drops off the standard-events channel. When enabled, Pusha dynamically imports `@shopify/standard-events` (resolved via the theme's importmap) and re-dispatches `PageViewEvent` on every swap.
+This bridge used to be documented here as analytics bridge #4. It has moved to
+[Standard storefront events](#standard-storefront-events--app-compatibility-not-analytics),
+because Shopify documents the channel as explicitly **not** for analytics:
+
+> **Use web pixels for analytics, not events:** Standard storefront events fire
+> regardless if buyer has consented to tracking. Use them to react on the page, not
+> to collect behavioral data.
+> — [Listen for events](https://shopify.dev/docs/api/storefront-events-and-actions/events/listen)
+
+It stays on by default and it still fires on every swap. It just isn't a pageview
+channel, and counting it as one is what produced the "unverified — might reach the
+pixel sandbox" claim that a measurement later disproved.
+
+---
+
+## Standard storefront events — app compatibility, not analytics
+
+Shopify publishes a fixed vocabulary of `shopify:*` DOM events that a storefront
+dispatches and apps listen for —
+[Standard storefront events and actions](https://shopify.dev/docs/api/storefront-events-and-actions).
+Twelve events covering page and product views, collection filtering, cart changes
+and search. The stated purpose:
+
+> Apps used to do this by parsing a storefront's DOM or intercepting `window.fetch`,
+> which meant a separate integration for every storefront. Now one integration
+> covers them all.
+
+**The theme is the authority on what fires.** This is the part that matters for a
+soft-navigating theme:
+
+> Most of these events come from the storefront's own dispatch calls, so **the theme
+> decides which ones exist**. Don't assume an event you depend on fires on a given
+> store. — [Listen for events](https://shopify.dev/docs/api/storefront-events-and-actions/events/listen)
+
+`shopify:page:view` is documented as firing once per page load, because "storefronts
+on the Online Store are multi-page, so every navigation is a fresh document." Under
+Pusha they are not. So Pusha re-dispatches it on every swap, which is the theme doing
+exactly what the dispatch docs describe — constructing the event and dispatching it
+when the interaction happens.
 
 ```js
-analytics: { standardEvents: 'auto' }   // fires only when the theme ships @shopify/standard-events
+analytics: { standardEvents: 'auto' }   // default — fires when the library resolves
 analytics: { standardEvents: false }    // disable
 ```
 
-- **`'auto'` (default)** no-ops on classic themes: if the import doesn't resolve, nothing fires — no effect on JSON-template / section themes.
-- **Page-type events** (`product_viewed`, `collection_viewed`) are **not** re-fired here. The theme's `<s-view-event view-event-trigger="connect">` elements re-fire those when they re-mount in the swapped content, so Pusha touching them would double-count.
-- Independent of bridge 1 — the standard-events channel and `Shopify.analytics.publish` don't cross-forward, so both can run without double-counting the generic pageview.
-- **Unverified: whether this reaches the web pixel sandbox.** `@shopify/standard-events` is resolved from the theme's importmap (it is not on the public npm registry), and re-dispatching `PageViewEvent` is a documented-surface call rather than an internals hack. Whether the platform bridges that channel into Web Pixels has not been tested here — it needs the pixel sandbox on a published store. If it does bridge, this is a supported route to the gap above; if it doesn't, that's the precise thing for Shopify to fix. Do not read this bridge as a pixel fix until someone confirms it.
+Payload is `{ page: { template, title, url } }`, with `template` read from the
+container's `data-page-type`.
+
+### Why this is filed here and not under analytics
+
+Because Shopify says so, in the same doc:
+
+> **Use web pixels for analytics, not events:** Standard storefront events fire
+> regardless if buyer has consented to tracking. Use them to react on the page, not
+> to collect behavioral data.
+
+That resolves a question this README previously left open. An earlier version of this
+section said it was "unverified whether this reaches the web pixel sandbox" and
+treated a positive result as a possible fix for the pixel gap. It was then measured
+not to reach the sandbox — 7 soft navigations, 0 `page_viewed`
+(`experiments/native-vs-pusha/standard-events-probe.md`). **That separation is by
+design, not a defect**, and the bridge was never a candidate pixel fix. The gap above
+stands on its own.
+
+What the bridge is actually for: keeping app code alive across a swap. An app that
+listens for `shopify:page:view` the way the docs tell apps to listen gets a signal on
+every Pusha navigation, where it would otherwise get one signal per session.
+
+### What is not yet established
+
+- **Whether installed apps listen for it in practice.** The vocabulary is recent and
+  adoption is unmeasured. Being sanctioned is not the same as being consumed. This is
+  the primary hypothesis of the probe rig at `~/Work/pusha-probe` (variant J).
+- **Non-module themes are currently missed.** Pusha resolves the library with a
+  dynamic `import('@shopify/standard-events')`, which needs the theme's importmap. The
+  [dispatch guide](https://shopify.dev/docs/api/storefront-events-and-actions/events/dispatch#loading-the-library)
+  documents a second path for themes without modules — assigning the module to
+  `window.StandardEvents` — and Pusha does not check that global. A Dawn-derived theme
+  following the documented non-module path silently no-ops.
+- **Page-type events are deliberately not re-fired.** `product_viewed` /
+  `collection_viewed` come from the theme's own `<s-view-event>` elements, which
+  re-fire when they re-mount in swapped content. Pusha touching them would
+  double-count.
+
+### Actions
+
+The same API defines **actions** — `openCart`, `updateCart`, `getCart` — that apps
+call without knowing how a storefront renders its cart, with themes able to override
+the default behavior so a call "updates your UI without reloading the page." Pusha
+does not implement or override actions today. It is the natural seam for the
+[cart](#cart) contract and is unexplored.
 
 ---
 
@@ -612,6 +692,116 @@ document.addEventListener('cart:mutated', (event) => {
 
 ---
 
+## App compatibility — what survives a swap, measured
+
+Theme app extension code goes inert across a swap: the app's bundle executed on the
+first document and nothing re-runs it, so app block markup comes back looking correct
+with dead JavaScript behind it. Bucket X of `pusha audit` reports which installed apps
+sit inside the swap container.
+
+**Measured 2026-09-11** against a purpose-built extension, four soft navigations on a
+real storefront, one variant per loading shape:
+
+| App block shape | Result |
+| --- | --- |
+| **Listens for `shopify:page:view`** | **recovers every nav, zero double-init** |
+| **Authored as a custom element** | **recovers every nav, zero double-init** |
+| Schema-attribute JS, no re-init hook | inert |
+| Inline `<script>` in block markup | inert |
+| In-markup `<script src>` | inert |
+| `<script type="module">` in markup | inert |
+
+Two shapes recover, with **no configuration on the theme side** — Pusha's shipped
+default already dispatches `shopify:page:view`. Both are documented and supported.
+
+**The loading shape does not determine failure.** Four mechanisms went inert
+identically. Notably this rules out "re-execute the scripts in the swapped markup" as
+a general remedy: for the canonical case the JS is never in the markup — the
+`javascript` schema attribute makes Shopify's renderer inject a `<script async>` into
+the rendered page's `<head>`.
+
+### If you own the app
+
+Do one of these. Both are supported and neither needs anything from the theme:
+
+```js
+// 1. Listen for the standard storefront event Pusha re-dispatches on every swap.
+document.addEventListener('shopify:page:view', () => {
+  document.querySelectorAll('[data-my-app-block]').forEach(mount);
+});
+```
+
+```js
+// 2. Or author the block as a custom element — the browser handles it.
+customElements.define('my-app-block', class extends HTMLElement {
+  connectedCallback() { this.mount(); }
+  disconnectedCallback() { this.teardown(); }
+});
+```
+
+### If you don't own the app
+
+You cannot wrap code you did not write. Opt the surrounding navigation out with
+`data-no-transition`, or treat those routes as PJAX-ineligible.
+
+Two experimental theme-side fallbacks exist and **both ship off**:
+
+```js
+window.theme.config = {
+  appCompat: {
+    sectionEvents: false,              // default
+    reexecuteExtensionScripts: false,  // default
+  },
+};
+```
+
+- **`sectionEvents`** — dispatches `shopify:section:unload` before the swap and
+  `shopify:section:load` after, on every `#shopify-section-*`. One flag governs both
+  halves deliberately: load without unload leaks a listener set per navigation, worse
+  than doing nothing. ⚠ `shopify:section:*` are theme *editor* events; nothing
+  documents a theme dispatching them on the storefront. Best-effort compatibility, no
+  ordering guarantee beyond unload → remove → insert → load.
+- **`reexecuteExtensionScripts`** — ⚠ **MEASURED HARMFUL. Last resort only.**
+  Re-executes scripts from `cdn.shopify.com/extensions/` only, bypassing head-sync's
+  dedupe for that one origin. The dedupe stays for theme scripts because re-running one
+  throws `Identifier 'X' has already been declared`.
+
+  It does work: it is the only mechanism measured that revives an app block with **no
+  re-init hook at all**. But re-executing a script does not replace the previous
+  execution — it **adds another one, listeners and all**.
+
+  **The cost is unbounded accumulation, not a single extra bind.** Measured over 4
+  navigations (`pusha-probe`, run 2): a variant holding one `shopify:page:view`
+  listener finished with **five** listeners and 14 double-inits, and a single click
+  fired every one of them. For a real app that is five analytics events per click, five
+  API calls, five modals — compounding across the session, never resetting until a hard
+  load. Nothing throws, and the widget looks *more* alive, not less.
+
+  Apps that only scan on execute (no listeners) come through looking clean. They are
+  not recovering; they are being reinstalled wholesale once per navigation.
+
+  It also **cannot repair a `type="module"` bundle**, which executes once per URL per
+  document no matter how many times the tag is added.
+
+  Enable it only when you have verified that nothing on the page registers listeners on
+  `document` or `window` — which in practice means one app, audited by hand.
+
+Measure on your own store before enabling either. `debug: true` prints what the runtime
+sees on every swap.
+
+### Not implemented: Section Rendering API re-fetch
+
+Re-fetching a section refreshes *Liquid output* without re-running an app's bundle,
+which already loaded into `<head>` and stays there. It fixes staleness, not binding —
+that's what [islands](#islands-section-rendering-api) are for.
+
+### The theme editor cannot answer any of this
+
+It performs a full page reload on every theme app extension change, so every app reads
+as recoverable there. Verify on the storefront, across a real swap.
+
+---
+
 ## Theme editor
 
 Pusha disables instant nav inside the theme editor (`window.Shopify.designMode === true`) and instead wires Shopify's section editor events:
@@ -638,14 +828,15 @@ Built in, not configurable:
 
 ## Bundle sizes
 
-Measured from a clean `npm run build` on 2026-08-04:
+Measured from a clean `npm run build` on 2026-09-11:
 
 | File | Raw | Gzipped |
 |---|---|---|
-| `dist/pusha.min.js` (UMD, prod) | 27.0 kB | **9.1 kB** |
-| `dist/pusha.esm.js` (ESM, main entry) | 19.6 kB | 6.2 kB |
+| `dist/pusha.min.js` (UMD, prod) | 32.2 kB | **10.7 kB** |
+| `dist/pusha.esm.js` (ESM, main entry) | 24.6 kB | 7.5 kB |
 
-Measured at `0.1.0`. The UMD bundle is everything — navigation, prefetch cache,
+Grown from 9.1 kB gzipped at 0.1.0 — the analytics bridges, the standard cart
+event bridge, and the app-compatibility flags landed since. The UMD bundle is everything — navigation, prefetch cache,
 islands, transitions, the component registry, the analytics bridge, and the
 accessibility handling. Diagnostics ship inside it too, gated at runtime by
 `debug: true`, so there's no separate development build to swap in.
@@ -733,6 +924,7 @@ Source layout under `src/`:
 | `islands.ts` | Section Rendering API revalidation |
 | `head-sync.ts` | Title, meta tags, body data-template, scripts, stylesheets, eager image waiting |
 | `analytics.ts` | Analytics bridges — custom events, Trekkie, standard-events, GA4, GTM |
+| `app-compat.ts` | Experimental theme-app-extension repairs (all flags off) |
 | `focus.ts` | A11y focus + aria-live |
 | `scroll.ts` | Manual scroll restoration |
 | `config.ts` | Resolved-config singleton |

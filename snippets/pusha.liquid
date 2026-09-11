@@ -12,6 +12,19 @@
   Pusha is effectively disabled for them. `pusha init` places this correctly;
   if you're moving the render tag manually, put it near the top of <head>.
 
+  ANALYTICS / APP COMPATIBILITY — the standardEvents bridge needs an importmap
+  entry that stock themes do NOT ship. Pusha re-dispatches `shopify:page:view`
+  (Standard storefront events) on every swap, which is the sanctioned way app
+  code learns a soft navigation happened. It resolves the library at runtime and
+  **no-ops silently** if the specifier is unmapped. Verified absent from stock
+  Horizon 2026-09-11. Add to your theme's existing importmap — do not add a
+  second <script type="importmap">, browsers honor only the first:
+
+    "@shopify/standard-events": "https://cdn.shopify.com/storefront/standard-events.js"
+
+  Check it resolved:  await import('@shopify/standard-events')
+                        .then(m => !!m.PageViewEvent).catch(() => false)
+
   To customise behaviour, populate window.theme.config BEFORE this render tag.
   See https://github.com/mimetic-themes/pusha for the full config surface.
 
