@@ -585,7 +585,7 @@ And the audit manifest records the file under `deferred: { reason: "H", indicato
 Liquid that evaluates per-request — `request.*`, `template.*`, `link.current`/`link.child_active`, `customer.*`, `cart.*`, `localization.*`, `'now' | date`, etc. — when it appears in files that render **outside `#MainContent`** and therefore don't re-render on PJAX nav. These files:
 
 - `layout/theme.liquid` (always — the shell itself)
-- `sections/*.liquid` listed in section-group JSON files (`sections/header-group.json`, `sections/footer-group.json`, `sections/aside-group.json`, any group that isn't the main content group)
+- `sections/*.liquid` listed in a section-group JSON the layout renders outside the container (`header-group`, `footer-group`, `aside-group`, and any group no layout places inside `#MainContent`)
 - `snippets/*.liquid` rendered transitively from either of the above
 
 ### Why broken
@@ -703,10 +703,29 @@ Bucket L is not a worker-mechanical bucket like E/F/G. The orchestrator queries 
 
 For a section file to count as "persistent shell", it must be:
 - Listed in a section-group JSON file *other than* the main content group, OR
-- Rendered from `layout/theme.liquid` directly via `{% section %}` (older pattern, deprecated by section groups), OR
+- Rendered from any layout directly via `{% section %}`, outside the swap container, OR
 - A snippet rendered transitively from either of the above.
 
-The audit determines this by parsing `sections/*-group.json`, building a section-membership set, and excluding any section whose group is the main content group (typically the one rendering `content_for_layout` / `#MainContent` — detected by reading `layout/theme.liquid`).
+How the audit actually resolves it, so you can predict the `[shell]` tag:
+
+1. **Every `layout/*.liquid`** is shell — `password.liquid` and custom layouts
+   included, not just `theme.liquid`.
+2. It finds each layout's container (the element carrying `data-page-container`
+   or `id="MainContent"`) and splits the file at it. **Only what a layout renders
+   *outside* that element is shell.** A snippet rendered inside is swapped with
+   the page — themes do this deliberately, e.g. an identity block that must
+   arrive with the new content rather than describe the landing page forever.
+3. Outside the container it follows `{% sections 'group' %}` **and the bare
+   `{% section 'name' %}` form**, in tag syntax and inside `{% liquid %}` blocks.
+4. From every shell file it follows `{% render %}` / `{% include %}` three levels
+   deep. A shell section has no inside/outside split — everything it renders is
+   shell too.
+5. A section group no layout mentions falls back to shell. A group the layout
+   renders *inside* the container is excluded.
+
+If you disagree with a `[shell]` tag, check where the file is rendered from
+before transforming it. Getting this wrong is the expensive mistake: a shell
+script wrapped in `sectionInits` never runs, and nothing reports an error.
 
 ---
 

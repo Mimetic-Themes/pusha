@@ -906,24 +906,110 @@ function parseThemeJson(text) {
 // shell). Includes layout/theme.liquid, every section type referenced in
 // sections/*-group.json (section groups always render in the layout shell),
 // and snippets transitively rendered from those — capped at depth 3.
-function resolvePersistentShellFiles(themePath) {
-  const layoutPath = join(themePath, 'layout/theme.liquid');
-  const result = new Set();
-  if (existsSync(layoutPath)) result.add(layoutPath);
+// Span of the swap container inside a layout, as [start, end) character offsets.
+// Anything a layout renders inside that span is replaced on every navigation and
+// is therefore NOT shell; anything outside it persists. Returns null when the
+// layout has no recognisable container, in which case the caller treats the
+// whole file as shell — the conservative reading.
+function containerSpan(layoutText) {
+  const open = /<(\w+)[^>]*?(?:data-page-container|id=["']MainContent["'])[^>]*>/i.exec(layoutText);
+  if (!open) return null;
+  const tag = open[1].toLowerCase();
+  const openRe = new RegExp(`<${tag}\\b`, 'gi');
+  const closeRe = new RegExp(`</${tag}\\s*>`, 'gi');
+  let depth = 0;
+  let cursor = open.index;
+  // Walk opens and closes together so a nested <div> inside a <div> container
+  // does not end the span early.
+  while (cursor < layoutText.length) {
+    openRe.lastIndex = cursor;
+    closeRe.lastIndex = cursor;
+    const nextOpen = openRe.exec(layoutText);
+    const nextClose = closeRe.exec(layoutText);
+    if (!nextClose) return [open.index, layoutText.length];
+    if (nextOpen && nextOpen.index < nextClose.index) {
+      depth++;
+      cursor = nextOpen.index + 1;
+      continue;
+    }
+    depth--;
+    cursor = nextClose.index + nextClose[0].length;
+    if (depth === 0) return [open.index, cursor];
+  }
+  return [open.index, layoutText.length];
+}
 
+function resolvePersistentShellFiles(themePath) {
+  const result = new Set();
   const sectionsDir = join(themePath, 'sections');
+
+  // Every layout, not just theme.liquid — password.liquid and custom layouts
+  // have the same persistent shell.
+  const layoutDir = join(themePath, 'layout');
+  const layouts = existsSync(layoutDir)
+    ? readdirSync(layoutDir).filter((f) => f.endsWith('.liquid')).map((f) => join(layoutDir, f))
+    : [];
+  for (const layout of layouts) result.add(layout);
+
+  const addGroup = (group) => {
+    const groupFile = join(sectionsDir, `${group}.json`);
+    if (!existsSync(groupFile)) return;
+    const parsed = parseThemeJson(readFileText(groupFile));
+    if (!parsed || !parsed.sections) return;
+    for (const inst of Object.values(parsed.sections)) {
+      const type = inst && inst.type;
+      if (!type) continue;
+      const sectionFile = join(sectionsDir, `${type}.liquid`);
+      if (existsSync(sectionFile)) result.add(sectionFile);
+    }
+  };
+
+  // What each layout renders OUTSIDE its container is shell. Handles both
+  // `{% sections 'group' %}` and the bare `{% section 'name' %}` form, in tag
+  // syntax and inside `{% liquid %}` blocks. The section form was previously
+  // missed entirely, so a theme writing `{% section 'header' %}` had its header
+  // classified as `section` scope — and the audit then told an agent to wrap it
+  // in sectionInits, which is never walked outside the container.
+  const groupsInsideContainer = new Set();
+  for (const layout of layouts) {
+    const text = readFileText(layout);
+    const span = containerSpan(text);
+    const outside = (index) => !span || index < span[0] || index >= span[1];
+
+    for (const re of [
+      /\{%-?\s*sections\s+['"]([\w-]+)['"]/g,
+      /^\s*sections\s+['"]([\w-]+)['"]/gm,
+    ]) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (outside(m.index)) addGroup(m[1]);
+        else groupsInsideContainer.add(m[1]);
+      }
+    }
+
+    for (const re of [
+      /\{%-?\s*section\s+['"]([\w-]+)['"]/g,
+      /^\s*section\s+['"]([\w-]+)['"]/gm,
+    ]) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (!outside(m.index)) continue;
+        const sectionFile = join(sectionsDir, `${m[1]}.liquid`);
+        if (existsSync(sectionFile)) result.add(sectionFile);
+      }
+    }
+  }
+
+  // Groups no layout mentions: fall back to treating them as shell, which is
+  // what this did for every group before. A group the layout renders INSIDE the
+  // container is excluded — it is swapped like any other page content.
   if (existsSync(sectionsDir)) {
     for (const entry of readdirSync(sectionsDir)) {
       if (!entry.endsWith('.json')) continue;
-      const text = readFileText(join(sectionsDir, entry));
-      const parsed = parseThemeJson(text);
-      if (!parsed || !parsed.sections) continue;
-      for (const inst of Object.values(parsed.sections)) {
-        const type = inst && inst.type;
-        if (!type) continue;
-        const sectionFile = join(sectionsDir, `${type}.liquid`);
-        if (existsSync(sectionFile)) result.add(sectionFile);
-      }
+      if (groupsInsideContainer.has(entry.replace(/\.json$/, ''))) continue;
+      addGroup(entry.replace(/\.json$/, ''));
     }
   }
 
@@ -936,11 +1022,23 @@ function resolvePersistentShellFiles(themePath) {
   // (e.g. Dawn's sections/header.liquid → header-mega-menu) get skipped.
   const liquidBlockRe = /\{%-?\s*liquid\s*([\s\S]*?)-?%\}/g;
   const liquidRenderRe = /^\s*(?:render|include)\s+['"]([\w-]+)['"]/gm;
+  // A layout renders things on both sides of its container. Only what sits
+  // outside persists; a snippet rendered inside is swapped with the page, and
+  // calling it shell would route its scripts to onFirstLoad, which never
+  // re-runs. Themes do put snippets in there deliberately — the trekkie
+  // identity block has to arrive with the swapped content to describe the page
+  // just navigated to. Sections and snippets already known to be shell have no
+  // such split: everything they render is shell too.
+  const layoutSpans = new Map();
+  for (const layout of layouts) layoutSpans.set(layout, containerSpan(readFileText(layout)));
+
   let frontier = Array.from(result);
   for (let depth = 0; depth < 3; depth++) {
     const nextFrontier = [];
     for (const file of frontier) {
       const text = readFileText(file);
+      const span = layoutSpans.get(file) ?? null;
+      const outside = (index) => !span || index < span[0] || index >= span[1];
       const addSnippet = (name) => {
         const snippetFile = join(snippetsDir, `${name}.liquid`);
         if (!existsSync(snippetFile) || result.has(snippetFile)) return;
@@ -949,14 +1047,19 @@ function resolvePersistentShellFiles(themePath) {
       };
       renderTagRe.lastIndex = 0;
       let m;
-      while ((m = renderTagRe.exec(text)) !== null) addSnippet(m[1]);
+      while ((m = renderTagRe.exec(text)) !== null) {
+        if (outside(m.index)) addSnippet(m[1]);
+      }
       liquidBlockRe.lastIndex = 0;
       let lb;
       while ((lb = liquidBlockRe.exec(text)) !== null) {
         const body = lb[1];
+        const blockStart = lb.index;
         liquidRenderRe.lastIndex = 0;
         let lr;
-        while ((lr = liquidRenderRe.exec(body)) !== null) addSnippet(lr[1]);
+        while ((lr = liquidRenderRe.exec(body)) !== null) {
+          if (outside(blockStart + lr.index)) addSnippet(lr[1]);
+        }
       }
     }
     if (nextFrontier.length === 0) break;

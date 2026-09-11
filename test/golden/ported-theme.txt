@@ -32,9 +32,9 @@ whitelists: on (default — pass --no-whitelist to disable)
 
 ## H. Module-level state — hard, human review
   Human review. Module-level state and IIFEs hold closures that don't replay on swap. Check reachability — dead code can be deleted; live code needs refactor.
-  snippets/header-search.liquid  [IIFE with no class — likely procedural state]  [include]
+  snippets/header-search.liquid  [IIFE with no class — likely procedural state]  [shell]
   Fix by location:
-    · include     → Verify render context; module-level closures do not replay on swap.
+    · shell       → Shell module state persists across navs — usually intended, but verify it should not reset per page.
 
 ## K. Portal-to-body custom elements — add data-pusha-cleanup
   Portal-to-body custom element. Survives a swap because connectedCallback moves it outside the swap container. Add `data-pusha-cleanup` to every render site so Pusha removes it before each nav.
