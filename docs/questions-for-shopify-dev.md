@@ -12,7 +12,7 @@ disagreed with each other's implications once.
 
 ---
 
-## Tier 1 — unblocks the probe rig (`~/Work/pusha-probe`)
+## Tier 1 — unblocks the probe rig (`pusha-probe`)
 
 ### Q1 — Can an extension-only app contain a theme app extension?
 
@@ -49,7 +49,7 @@ disagreed with each other's implications once.
 > answer reasoned from *listing* ("you cannot publish just a theme app extension")
 > to *hosting*, which does not follow. The CLI settled it.
 >
-> Rig: `~/Work/pusha-probe/pusha-probe`.
+> Rig: `pusha-probe`.
 
 ### Q2 — Does a TAE keep working with an unreachable `application_url`?
 

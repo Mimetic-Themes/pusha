@@ -1,8 +1,10 @@
 # Starting brief — implement Bucket X, run it against a real app stack
 
-**Status:** not started. Design exists in [`app-integration-audit.md`](./app-integration-audit.md)
-Part 1; this is the implementation brief, the test corpus, and the ground truth
-gathered on 2026-08-06 from two real themes plus a docs review.
+**Status:** implemented. Bucket X ships in `pusha audit`, and its remediation text was
+rewritten around the measured probe result on 2026-09-11. Design is in
+[`app-integration-audit.md`](./app-integration-audit.md) Part 1; this document is kept
+for the implementation brief, the test corpus, and the ground truth gathered on
+2026-08-06 from two real themes plus a docs review.
 
 ## The question this answers
 
@@ -33,7 +35,7 @@ below, and do the pre-test before writing either half.
 
 > **SUPERSEDED 2026-09-11.** The editor performs a full page reload on any theme
 > app extension change, so every app reads as recoverable and the measurement carries
-> no information. Replaced by `~/Work/pusha-probe` — a purpose-built extension measured
+> no information. Replaced by `pusha-probe` — a purpose-built extension measured
 > under real Pusha navigation. The inference below is sound; the instrument was not.
 > Result: [The runtime half](#the-runtime-half).
 
@@ -251,7 +253,7 @@ which is the location routing X needs. Reuse it.
 ## The runtime half
 
 **MEASURED 2026-09-11 — and the answer removes most of this section's reason to exist.**
-See `~/Work/pusha-probe/pusha-probe/results.md` for the full run.
+See `pusha-probe/results.md` for the full run.
 
 Run 0 was Pusha's shipped default with no flag enabled. Across four soft navigations
 on a real storefront, against a purpose-built extension with one variant per loading

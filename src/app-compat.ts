@@ -6,7 +6,7 @@
 // flag, all DEFAULTED OFF.
 //
 // They exist to be measured, not to be switched on. The rig that measures them
-// is ~/Work/pusha-probe, and the result decides which (if any) ships on by
+// is pusha-probe, and the result decides which (if any) ships on by
 // default. See docs/proposals/bucket-x-brief.md → "The runtime half".
 //
 // ⚠ None of this is a Shopify-blessed lifecycle. `shopify:section:*` are theme

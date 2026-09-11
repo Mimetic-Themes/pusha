@@ -19,7 +19,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   (none)
 
 ## E. Procedural inline <script> — wrap by location
-  Procedural inline script that must re-run on each PJAX swap. The correct fix depends on where it lives — see "Fix by location" below.
+  Procedural inline script that must re-run on each swap. The correct fix depends on where it lives — see "Fix by location" below.
   (none)
 
 ## F. {% javascript %} blocks — F1 safe, F2 wrap by location
@@ -27,7 +27,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   (none)
 
 ## G. DOMContentLoaded handlers — replace by location
-  DOMContentLoaded does not re-fire after PJAX swaps. The replacement depends on where the handler lives — see "Fix by location" below.
+  DOMContentLoaded does not re-fire after a swap. The replacement depends on where the handler lives — see "Fix by location" below.
   (none)
 
 ## H. Module-level state — hard, human review
@@ -35,7 +35,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   (none)
 
 ## K. Portal-to-body custom elements — add data-pusha-cleanup
-  Portal-to-body custom element. Survives PJAX swaps because connectedCallback moves it outside the swap container. Add `data-pusha-cleanup` to every render site so Pusha removes it before each nav.
+  Portal-to-body custom element. Survives a swap because connectedCallback moves it outside the swap container. Add `data-pusha-cleanup` to every render site so Pusha removes it before each nav.
   (none)
 
 ## L. Liquid persistent state — request-scoped Liquid in the layout shell
@@ -59,7 +59,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   (none)
 
 ## X. Theme app extensions — app blocks, embeds, and the Script Tag blind spot
-  Theme app extensions. Informational + advisory — an app's code cannot be mechanically transformed, so X inventories app surfaces and assigns each a PJAX-safety verdict routed by location. Two reports: X-surface lists every { "type": "@app" } declaration in a {% schema %}, split by container membership — a risk map that stays valid when the merchant installs something tomorrow, and it works with zero apps installed. X-placed recursively walks the blocks tree of every templates/*.json and sections/*.json plus config/settings_data.json -> current.blocks, and reports what is actually installed. Detection parses JSON and reads `type`: a text match misses the escaped `shopify:\/\/apps\/` encoding Shopify writes into some template files, and would report the flagship product template as app-free. Verdicts: at-risk (app block inside the swap container), survives (app block in a section group), survives-verify (app embed — outside the container, but references into the swapped region go stale with no repair signal), opaque (Script Tag API — invisible statically). App embeds with disabled: true are ignored.
+  Theme app extensions. Informational + advisory — an app's code cannot be mechanically transformed, so X inventories app surfaces and assigns each a swap-safety verdict routed by location. Two reports: X-surface lists every { "type": "@app" } declaration in a {% schema %}, split by container membership — a risk map that stays valid when the merchant installs something tomorrow, and it works with zero apps installed. X-placed recursively walks the blocks tree of every templates/*.json and sections/*.json plus config/settings_data.json -> current.blocks, and reports what is actually installed. Detection parses JSON and reads `type`: a text match misses the escaped `shopify:\/\/apps\/` encoding Shopify writes into some template files, and would report the flagship product template as app-free. Verdicts: at-risk (app block inside the swap container), survives (app block in a section group), survives-verify (app embed — outside the container, but references into the swapped region go stale with no repair signal), opaque (Script Tag API — invisible statically). App embeds with disabled: true are ignored.
   App wrapper: sections/_blocks.liquid  (theme-owned — top-level app blocks render through it)
   X-surface — where app blocks can land (@app schema declarations; valid with zero apps installed):
     blocks/_card.liquid                 [block]    depends on host section — a theme block inherits its host's location
@@ -120,13 +120,13 @@ whitelists: on (default — pass --no-whitelist to disable)
     block       — promote to a custom element (connected/disconnectedCallback); the browser re-mounts it.
     template    — a custom element, or an onAfterInit((c, meta) => …) hook keyed on meta.template.
     shell       — runs once and persists across navs; use onFirstLoad / setupGlobal, never sectionInits.
-    head-config — inert config (no call expressions); leave as-is, it is PJAX-safe.
+    head-config — inert config (no call expressions); leave as-is, it is safe across swaps.
 
   A and B need no action. C is safe but verify external refs are tracked.
   Re-run with --json for structured output a tool can consume directly.
 
 ## Skill freshness
-  CLI is @mimetic/pusha@0.1.0.
+  CLI is @mimeticthemes/pusha@0.1.0.
   No installed skill files found at standard paths (.claude/skills/pusha/, .cursor/rules/pusha.md, .aider-conventions.md).
   Run `pusha skill --claude` (or --cursor / --aider) to install one.
 

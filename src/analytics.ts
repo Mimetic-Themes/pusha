@@ -51,10 +51,12 @@
 //                 navigation happened. The docs put the theme in charge of what
 //                 fires ("the theme decides which ones exist"), which is what
 //                 licenses dispatching per navigation instead of per document.
-//                 'auto' by default: no-ops unless @shopify/standard-events
-//                 resolves via the theme's importmap. ⚠ The non-module path the
-//                 dispatch guide documents (window.StandardEvents) is NOT checked
-//                 here, so a Dawn-derived theme following it silently no-ops.
+//                 'auto' by default: resolves @shopify/standard-events through
+//                 the theme's importmap, falling back to the window.StandardEvents
+//                 global the dispatch guide documents for non-module themes. Only
+//                 a successful resolution is cached — the global is assigned from
+//                 an async module script, so it can be absent on an early swap and
+//                 present on a later one. No-ops silently when neither resolves.
 //                 Page-type events self-heal via <s-view-event> — not re-fired here.
 //                 Measured not to reach the web pixel sandbox; that separation is
 //                 BY DESIGN, not a defect, and was never a candidate pixel fix.

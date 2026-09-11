@@ -2,20 +2,48 @@
 
 **Instant page transitions for Shopify Online Store 2.0 themes.**
 
-A small drop-in runtime that intercepts internal links, swaps the main container without a full page reload, and gives storefronts a native-app feel.
+Pusha loads the next page in the background and swaps only the main content. The header, footer, and cart drawer stay in place. Pages change with no reload.
 
-- 9.1 kB gzipped (UMD), zero runtime dependencies
-- Built for OS 2.0 themes — JSON templates, sections, **theme blocks** (`blocks/`), and the theme editor
-- Hover/touch prefetch with stale-while-revalidate cache
-- Named transitions, component registry, lifecycle hooks
-- Section Rendering API revalidation for stale-prone regions ("islands")
-- Analytics bridges — re-fire page-view signals on every swap (see [Analytics & tracking](#analytics--tracking) for what they do and do not reach)
-- Automatic focus restoration + screen-reader announcement on every swap
-- Theme editor co-exists — sections re-init on `shopify:section:load` / `:select`
+**See it running:** [yatseen.com](https://yatseen.com) — hover a product on [/collections/merch](https://yatseen.com/collections/merch) with the network tab open to watch it prefetch, then click. That's an early build in production, not a pinned release of this package.
 
-**Live prototype:** [yatseen.com](https://yatseen.com) is a production Shopify storefront running the Pusha runtime. Hover a product on [/collections/merch](https://yatseen.com/collections/merch) (with the network tab open) to watch it prefetch, then click for an instant, no-reload transition. It's an early build — a proof of the approach in the wild, not a pinned release of this package.
+> **Status: alpha (`0.1.0`).** Early, unstable software — expect rough edges, incomplete coverage, and breaking changes in any 0.x release. It has not been proven across a range of production stores. Pin a minor, and test on a real store before you ship.
 
-> **Status: alpha (`0.1.0`).** This is early, unstable software — expect rough edges, incomplete coverage, and breaking changes in any 0.x release. It has not been proven across a range of production stores. Pin a minor, and test thoroughly on a real store before shipping.
+## Quickstart
+
+You need Node 20.19 or later and a theme folder with `layout/theme.liquid`.
+
+```sh
+cd path/to/your/theme
+npx github:mimetic-themes/pusha init      # add --dry-run to preview
+npx github:mimetic-themes/pusha audit
+```
+
+`init` makes three changes:
+
+- adds `assets/pusha.min.js` — the runtime, 11 kB gzipped
+- adds `snippets/pusha.liquid` — config, the default fade, the script tag
+- edits `layout/theme.liquid` — `{% render 'pusha' %}` in `<head>`, plus data attributes on `<body>` and on your main container
+
+`audit` finds the scripts that run once per page load. After a swap they do not run again. For each one it prints the fix.
+
+Push the theme and click around. To watch what Pusha does, set `debug: true` in `snippets/pusha.liquid` and open the console.
+
+**Using a bundler?** `npm install github:mimetic-themes/pusha`, then `import { initRuntime } from '@mimeticthemes/pusha'; initRuntime();`. See [Path B](#path-b--bundler) for the markup you add by hand.
+
+**Before you put this on a merchant store, read [Before you ship this](#before-you-ship-this).** A swap is not a page load. Three things do not survive one on their own, and none of them throws an error when it breaks.
+
+### What you get
+
+- 11 kB gzipped (UMD), zero runtime dependencies
+- Built for OS 2.0 — JSON templates, sections, **theme blocks** (`blocks/`), and the theme editor
+- Links prefetch on hover or touch, with a cache that serves stale and refreshes behind you
+- Named transitions, a component registry, and lifecycle hooks for your own code
+- Marked regions re-fetch through the Section Rendering API, so prices and stock stay current ([islands](#islands-section-rendering-api))
+- Page-view signals re-fire on every swap — see [Analytics & tracking](#analytics--tracking) for what they do and do not reach
+- Focus moves and screen readers announce the new page, automatically
+- Sections re-initialize in the theme editor on `shopify:section:load` / `:select`
+
+---
 
 ## Before you ship this
 
@@ -30,7 +58,7 @@ A soft navigation is not a document load. Shopify's platform does a set of thing
   **Checkout is unaffected.** It's its own document load, so `checkout_started` through `checkout_completed` fire normally. With the landing pageview, that means conversion tracking and purchase attribution survive. What's lost is the middle — `product_viewed`, `collection_viewed`, the browse funnel.
 
   **Admin reporting is separately recoverable.** With `analytics: { trekkie: true }` a soft navigation is counted as a pageview in admin — **8.5 pageviews per session** against a **~1** control with the bridge off, same click path, published OS 2.0 store. Leave it off and admin undercounts by roughly 8×.
-- **Apps go stale or silent.** Pusha has not been built or tested against theme app extensions. App blocks inside the swapped region come back as inert HTML with dead JS; app embeds in the persistent shell survive but hold listeners pointing at replaced nodes; app-injected `<script>` tags initialize once and stay quiet after page one. There is no way to wrap code you don't own, so opt those pages out (`data-no-transition` on links into them, or `pjax: false` globally) until app support lands.
+- **Apps inside the swapped region go inert unless they re-init.** An app block's JavaScript ran on the first document and nothing re-runs it, so the markup comes back looking correct with dead JS behind it. Measured against a purpose-built extension: two shapes recover on every navigation with zero double-init — a block that listens for `shopify:page:view`, and one authored as a custom element. Every other loading shape stays inert, `type="module"` included. App embeds in the persistent shell survive but hold listeners pointing at replaced nodes. You cannot wrap code you don't own, so until an app adopts one of the two working shapes, opt those pages out (`data-no-transition` on links into them, or `pjax: false` globally). `pusha audit` bucket X reports which installed apps sit inside the container; the full table is in [App compatibility](#app-compatibility--what-survives-a-swap-measured).
 - **The persistent shell freezes at first render.** Header, footer, and anything outside the container keep the Liquid output of whichever page the buyer landed on. Currency, customer state, localization, and cart context in those regions can drift from the current URL. Pusha syncs the head and the container; it does not re-render the shell. [Islands](#islands-section-rendering-api) exist for exactly this and will revalidate a marked region through the Section Rendering API — but you have to identify the stale-prone regions yourself, and anything you miss stays wrong silently.
 
 None of this depends on undocumented platform internals — Pusha reads standard markup and calls documented APIs, so a Shopify deploy is unlikely to break it overnight. The risk is the inverse: the gaps are quiet. Nothing throws. A store can look perfect while its pixels report nothing and its header shows the wrong currency.
@@ -166,6 +194,7 @@ Set `window.theme.config` before the runtime boots. The `pusha.liquid` snippet d
     disabledComponents: [],              // skip these by name on every nav
     cartStatefulRoutes: [],              // routes whose cache to flush on cart:mutated
     standardCartEvents: true,            // bridge Shopify's standard cart events into cart:mutated
+    timeout: 10000,                      // ms to wait for a page before handing the URL to the browser (0 = wait forever)
 
     prefetchConfig: {
       page:       { soft:  60000, hard: 300000 },
@@ -187,13 +216,15 @@ Set `window.theme.config` before the runtime boots. The `pusha.liquid` snippet d
 
 A bare number is shorthand for `{ hard: n, soft: n / 4 }`. Omit a template to disable prefetch for it.
 
+**`timeout`** caps how long a navigation waits for its HTML. When it expires, `onNavError` fires and the browser performs a normal navigation to the same URL, so the buyer still gets the page. Without a cap a request that never settles leaves the container faded with no way out. The snippet also grows a thin progress bar after 400 ms of waiting, so a slow navigation looks slow rather than broken.
+
 **Merchant-facing settings** (toggles, presets) are starter-template territory, not framework. Map them in `theme.liquid` from `settings.*` into `window.theme.config`.
 
 ---
 
 ## Analytics & tracking
 
-A PJAX swap is **not** a browser navigation, so nothing re-fires analytics on its own. Left unhandled, every store on Pusha silently under-reports — pageviews stop counting after the first page, and any tracking that keys off a document load goes quiet.
+A swap is **not** a browser navigation, so nothing re-fires analytics on its own. Left unhandled, every store on Pusha silently under-reports — pageviews stop counting after the first page, and any tracking that keys off a document load goes quiet.
 
 > ### ⚠ Known gap: Pusha does not currently reach Web Pixels
 >
@@ -223,7 +254,7 @@ Full procedure and payloads: `experiments/monorail-admin-probe.md`.
 
 What the bridge does still cover is below. Every channel is best-effort: absent globals are silent no-ops, and nothing here throws or blocks navigation.
 
-> **Validate on a real, published store before trusting any of it.** GA4 DebugView and pixel configs only behave correctly against a published theme — a preview/dev environment won't tell you the truth. Check Shopify admin live view, GA4 Realtime/DebugView, and Meta Events Manager across a few PJAX navigations.
+> **Validate on a real, published store before trusting any of it.** GA4 DebugView and pixel configs only behave correctly against a published theme — a preview/dev environment won't tell you the truth. Check Shopify admin live view, GA4 Realtime/DebugView, and Meta Events Manager across a few navigations.
 
 Six independent bridges, switchable via the object form:
 
@@ -329,7 +360,7 @@ The theme supplies page-type payloads as a JSON script inside the swapped contai
 
 A single object or an array of `{ name, data }` events is accepted. Match Shopify's [standard event payloads](https://shopify.dev/docs/api/web-pixels-api/standard-events) so the shape is right if and when a supported publish path exists.
 
-**The one documented way to reach pixels on a swap** is a custom event plus a merchant-authored custom pixel. Custom events are publishable from the storefront and are delivered to custom pixels, so a merchant can add a custom pixel in Shopify admin that subscribes to a namespaced event and calls `fbq` / `gtag` itself. This is not wired up in Pusha yet — it is the intended direction, tracked against the gap above. It does not reach *app* pixels: those subscribe to standard events, and a custom event only carries into them as unparsed `customData`.
+**The one documented way to reach pixels on a swap** is a custom event plus a merchant-authored custom pixel. Custom events are publishable from the storefront and are delivered to custom pixels, so a merchant can add a custom pixel in Shopify admin that subscribes to a namespaced event and calls `fbq` / `gtag` itself. Pusha publishes that event — see [Custom events](#1a-custom-events-customevents--on-by-default) below, and [docs/analytics-companion-pixel.md](docs/analytics-companion-pixel.md) for the pixel that consumes it. It does not reach *app* pixels: those subscribe to standard events, and a custom event only carries into them as unparsed `customData`.
 
 ### 2. GA4 (direct gtag.js) — opt-in
 
@@ -428,13 +459,17 @@ every Pusha navigation, where it would otherwise get one signal per session.
 
 - **Whether installed apps listen for it in practice.** The vocabulary is recent and
   adoption is unmeasured. Being sanctioned is not the same as being consumed. This is
-  the primary hypothesis of the probe rig at `~/Work/pusha-probe` (variant J).
-- **Non-module themes are currently missed.** Pusha resolves the library with a
-  dynamic `import('@shopify/standard-events')`, which needs the theme's importmap. The
+  the primary hypothesis of the `pusha-probe` rig (variant J) — a purpose-built
+  theme app extension kept in a separate private repo.
+- **Non-module themes are covered, but unmeasured in the wild.** Pusha resolves the
+  library with a dynamic `import('@shopify/standard-events')`, which needs the theme's
+  importmap. The
   [dispatch guide](https://shopify.dev/docs/api/storefront-events-and-actions/events/dispatch#loading-the-library)
   documents a second path for themes without modules — assigning the module to
-  `window.StandardEvents` — and Pusha does not check that global. A Dawn-derived theme
-  following the documented non-module path silently no-ops.
+  `window.StandardEvents` — and Pusha falls back to that global when the import fails.
+  Only a successful resolution is cached: the global is assigned from an async module
+  script, so it can be absent on an early swap and present on a later one. No
+  Dawn-derived theme following that path has been measured end to end.
 - **Page-type events are deliberately not re-fired.** `product_viewed` /
   `collection_viewed` come from the theme's own `<s-view-event>` elements, which
   re-fire when they re-mount in swapped content. Pusha touching them would
@@ -451,6 +486,11 @@ does not implement or override actions today. It is the natural seam for the
 ---
 
 ## Runtime API
+
+*For readers who know the term: this is a small, drop-in PJAX runtime. The event
+names keep the `pjax:` prefix for that reason. Everywhere else the docs say
+"swap" for the DOM operation and "navigation" for the click that causes it.*
+
 
 ```ts
 import {
@@ -742,7 +782,7 @@ customElements.define('my-app-block', class extends HTMLElement {
 ### If you don't own the app
 
 You cannot wrap code you did not write. Opt the surrounding navigation out with
-`data-no-transition`, or treat those routes as PJAX-ineligible.
+`data-no-transition`, or treat those routes as ineligible for instant navigation.
 
 Two experimental theme-side fallbacks exist and **both ship off**:
 
@@ -832,11 +872,11 @@ Measured from a clean `npm run build` on 2026-09-11:
 
 | File | Raw | Gzipped |
 |---|---|---|
-| `dist/pusha.min.js` (UMD, prod) | 32.2 kB | **10.7 kB** |
-| `dist/pusha.esm.js` (ESM, main entry) | 24.6 kB | 7.5 kB |
+| `dist/pusha.min.js` (UMD, prod) | 34.7 kB | **11.5 kB** |
+| `dist/pusha.esm.js` (ESM, main entry) | 26.9 kB | 8.1 kB |
 
-Grown from 9.1 kB gzipped at 0.1.0 — the analytics bridges, the standard cart
-event bridge, and the app-compatibility flags landed since. The UMD bundle is everything — navigation, prefetch cache,
+Grown from 9.1 kB gzipped in the first build — the analytics bridges, the standard
+cart event bridge, and the app-compatibility flags landed since. The UMD bundle is everything — navigation, prefetch cache,
 islands, transitions, the component registry, the analytics bridge, and the
 accessibility handling. Diagnostics ship inside it too, gated at runtime by
 `debug: true`, so there's no separate development build to swap in.
@@ -974,9 +1014,11 @@ documentation. Not shipped in the npm package (`files` excludes both).
   to Shopify for the new-Liquid / Standard Events preview. The first: a
   soft-navigation lifecycle event.
 - [`docs/proposals/`](docs/proposals/) — audit design RFCs. Buckets P (partials)
-  and X (theme app extension surface) are both implemented; X's runtime half —
-  re-dispatching the section lifecycle on swap — is not, and is gated on
-  [`experiments/editor-reinit-pretest.md`](experiments/editor-reinit-pretest.md).
+  and X (theme app extension surface) are both implemented. X's runtime half —
+  re-dispatching the section lifecycle on swap — ships as the experimental
+  `appCompat.sectionEvents` flag: off by default, and measured harmful when paired
+  with `reexecuteExtensionScripts`. See
+  [App compatibility](#app-compatibility--what-survives-a-swap-measured).
 
 ---
 

@@ -175,7 +175,7 @@ pixel can only have come through standard-events.
 ### 0. Publish
 
 ```sh
-cd ~/Work/base-theme-next
+cd <new-liquid-theme>
 shopify theme push --store <your-dev-store>.myshopify.com
 ```
 
