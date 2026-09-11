@@ -75,6 +75,13 @@ const log = {
 
 // ─── readline-based prompts (no deps) ───────────────────────────────────────
 function ask(question, { defaultYes = false } = {}) {
+  // Non-interactive stdin (CI, a coding agent, a pipe, `< /dev/null`): there is
+  // nobody to answer. Take the default and say so, rather than hanging forever
+  // or dying with "Detected unsettled top-level await".
+  if (!process.stdin.isTTY) {
+    console.log(`${question}${defaultYes ? ' [Y/n]' : ' [y/N]'} ${defaultYes ? 'Y' : 'N'} (non-interactive, using default)`);
+    return Promise.resolve(defaultYes);
+  }
   return new Promise((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     const suffix = defaultYes ? ' [Y/n] ' : ' [y/N] ';
@@ -122,6 +129,12 @@ async function copyOrSkip(srcAbs, destAbs, { force, dryRun }) {
   if (existing && buffersEqual(existing, incoming)) {
     log.same(`${destAbs} (already up to date)`);
     return false;
+  }
+  // Check dry-run BEFORE prompting: a run that writes nothing has no reason to
+  // ask permission to overwrite.
+  if (dryRun) {
+    log.add(`${destAbs} (dry-run, would ${existing ? 'overwrite' : 'create'})`);
+    return true;
   }
   if (existing && !force) {
     const ok = await ask(`  ${destAbs} exists with different content. Overwrite?`);
@@ -334,7 +347,7 @@ async function applyLayoutEdits(cwd, { yes, dryRun }) {
   }
   log.blank();
 
-  const proceed = yes || (await ask(`  Apply these edits?`, { defaultYes: true }));
+  const proceed = yes || dryRun || (await ask(`  Apply these edits?`, { defaultYes: true }));
   if (!proceed) {
     log.warn(`skipped layout edits`);
     warnings.forEach((w) => log.warn(w));
@@ -410,7 +423,11 @@ async function runInit(args) {
   await applyLayoutEdits(cwd, flags);
 
   log.blank();
-  log.ok('done. Commit the changes and reload your theme to see Pusha in action.');
+  if (flags.dryRun) {
+    log.ok('dry-run complete. No files were written. Re-run without --dry-run to apply.');
+  } else {
+    log.ok('done. Commit the changes and reload your theme to see Pusha in action.');
+  }
 }
 
 // ─── audit ──────────────────────────────────────────────────────────────────
