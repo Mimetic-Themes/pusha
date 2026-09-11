@@ -486,17 +486,232 @@ test('Shopify-reserved links are not intercepted (cart IS intercepted)', async (
     <a id="localization" href="/localization?country=US&language=en">Localization</a>
     <a id="giftcard" href="/gift_cards/abc/xyz">Gift card</a>
     <a id="appproxy" href="/a/some-app/page">App proxy</a>
+    <a id="cart-add" href="/cart/add?id=123">Add to cart</a>
+    <a id="cart-change" href="/cart/change?line=1&quantity=0">Remove</a>
+    <a id="cart-update" href="/cart/update?updates[]=0">Update</a>
+    <a id="cart-clear" href="/cart/clear">Clear</a>
+    <a id="cart-permalink" href="/cart/40000001:1">Permalink</a>
+    <a id="discount" href="/discount/SAVE10">Discount</a>
+    <a id="cart-page" href="/cart">Cart page</a>
   `;
 
   runtime.initRuntime();
   for (const id of [
     'checkout', 'checkouts', 'login', 'register', 'logout', 'recover', 'activate',
     'customer-auth', 'password', 'localization', 'giftcard', 'appproxy',
+    // GET requests that MUTATE server state. Intercepting these performs the
+    // mutation over fetch and, worse, repeats it when the buyer hits Back.
+    'cart-add', 'cart-change', 'cart-update', 'cart-clear', 'cart-permalink',
+    'discount',
   ]) {
     document.getElementById(id)!.click();
   }
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(fetchCalls.length, 0, 'no reserved link triggers a PJAX fetch');
+
+  // /cart itself only READS cart state, so it stays a regular themed page.
+  document.getElementById('cart-page')!.click();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(fetchCalls.length, 1, '/cart is still a PJAX navigation');
+  assert.match(fetchCalls[0].url, /\/cart$/);
+});
+
+test('href="#" and href="" are left alone for the theme to handle', async () => {
+  // Regression: both resolve to the current URL with an EMPTY hash, so the
+  // same-URL branch used to preventDefault() and scroll to top from the capture
+  // phase — before the theme's own click handler ran. Stock Dawn ships this
+  // shape in its localization form triggers.
+  document.body.innerHTML += `
+    <a id="hash-only" href="#">Toggle</a>
+    <a id="empty-href" href="">Empty</a>
+  `;
+  runtime.initRuntime();
+
+  for (const id of ['hash-only', 'empty-href']) {
+    const event = new window.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    document.getElementById(id)!.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, false, `${id}: Pusha must not preventDefault`);
+  }
+
+  await new Promise((r) => setTimeout(r, 30));
+  console.error('DEBUG_FETCHES', JSON.stringify(fetchCalls.map((c) => c.url)));
+  assert.equal(fetchCalls.length, 0, 'neither navigates nor warms the current page');
+
+  // A real link to the page you are already on is a different case: it still
+  // gets the scroll-to-top treatment rather than a pointless re-fetch.
+  document.body.insertAdjacentHTML('beforeend', `<a id="same-url" href="/">Home</a>`);
+  const sameUrlEvent = new window.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+  document.getElementById('same-url')!.dispatchEvent(sameUrlEvent);
+  assert.equal(sameUrlEvent.defaultPrevented, true, 'same-URL link is still handled');
+});
+
+test('a navigation that never resolves falls back to a full browser load', async () => {
+  // Without a cap the container sits faded at opacity 0 forever: the fetch never
+  // settles, so neither the swap nor the error path ever runs.
+  (globalThis as Record<string, unknown>).fetch = () => new Promise<Response>(() => {});
+
+  let navError: unknown = null;
+  hooks.onNavError((error) => {
+    navError = error;
+  });
+
+  runtime.initRuntime({ timeout: 60 });
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 250));
+
+  assert.ok(navError, 'onNavError fired');
+  assert.equal((navError as Error).name, 'TimeoutError');
+  assert.match((navError as Error).message, /timed out after 60ms/);
+});
+
+test('a cross-origin redirect is refused rather than parsed into this origin', async () => {
+  // fetch() follows redirects transparently. Parsing the result would inject
+  // another origin's <script src> tags into the shop's own document.
+  (globalThis as Record<string, unknown>).fetch = async () => {
+    const res = new Response(makePageHtml('product', '<h1>Elsewhere</h1>'), {
+      status: 200,
+      headers: { 'Content-Type': 'text/html' },
+    });
+    Object.defineProperty(res, 'url', { value: 'https://evil.example/products/foo' });
+    return res;
+  };
+
+  let navError: unknown = null;
+  hooks.onNavError((error) => {
+    navError = error;
+  });
+
+  runtime.initRuntime();
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 60));
+
+  assert.ok(navError, 'onNavError fired instead of swapping');
+  assert.match((navError as Error).message, /cross-origin redirect to https:\/\/evil\.example/);
+  assert.equal(document.querySelector('h1')?.textContent, 'Home', 'container never swapped');
+});
+
+test('a same-origin redirect records the URL the buyer actually landed on', async () => {
+  // Shopify issues these on every handle change. Pushing the requested path
+  // would leave the address bar on a page that no longer exists.
+  (globalThis as Record<string, unknown>).fetch = async () => {
+    const res = new Response(makePageHtml('product', '<h1>Renamed</h1>'), {
+      status: 200,
+      headers: { 'Content-Type': 'text/html' },
+    });
+    Object.defineProperty(res, 'url', { value: 'https://shop.test/products/foo-v2' });
+    return res;
+  };
+
+  runtime.initRuntime();
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 60));
+
+  assert.equal(window.location.pathname, '/products/foo-v2', 'final URL is in history');
+  assert.equal(document.querySelector('h1')?.textContent, 'Renamed');
+});
+
+test('a component that throws does not take down the rest, or PJAX itself', async () => {
+  // At boot initAll runs before the click listener is installed, so an uncaught
+  // throw here used to mean PJAX silently never started.
+  let goodInits = 0;
+  registryModule.registry.register('bad', {
+    init() {
+      throw new Error('component is broken');
+    },
+  });
+  registryModule.registry.register('good', {
+    init() {
+      goodInits++;
+    },
+  });
+
+  runtime.initRuntime();
+  assert.equal(goodInits, 1, 'the component after the thrower still initialized');
+
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 60));
+
+  assert.equal(fetchCalls.length, 1, 'link interception was still installed');
+  assert.equal(window.location.pathname, '/products/foo', 'navigation completed');
+  assert.equal(goodInits, 2, 'the good component re-initialized on swap');
+});
+
+test('a transition that throws falls back to CSS instead of reloading the page', async () => {
+  const transitionsModule = await import('../src/transitions.ts');
+  transitionsModule.registerTransition({
+    name: 'broken',
+    leave() {
+      throw new Error('anime is not defined');
+    },
+    enter() {
+      throw new Error('anime is not defined');
+    },
+  });
+
+  let navError: unknown = null;
+  hooks.onNavError((error) => {
+    navError = error;
+  });
+
+  runtime.initRuntime({ transitions: true });
+  await runtime.go('/products/bar', { transition: 'broken' });
+
+  assert.equal(navError, null, 'no navigation error — the swap still happened');
+  assert.equal(window.location.pathname, '/products/bar');
+});
+
+test('a superseded navigation does not release state the live one still owns', async () => {
+  // Regression: nav A's `finally` reset isTransitioning/currentNavigation
+  // unconditionally after B aborted it. The runtime then believed nothing was
+  // in flight, so a third click never aborted B — B and C both swapped, and the
+  // URL bar and the content ended up from different pages.
+  const seen: Array<{ url: string; signal: AbortSignal }> = [];
+  const releases: Array<() => void> = [];
+
+  (globalThis as Record<string, unknown>).fetch = (input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    const signal = init!.signal as AbortSignal;
+    seen.push({ url, signal });
+    return new Promise<Response>((resolve, reject) => {
+      releases.push(() =>
+        resolve(new Response(makePageHtml('product', `<h1>${url}</h1>`), {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        })),
+      );
+      signal.addEventListener('abort', () => {
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        reject(err);
+      });
+    });
+  };
+
+  document.body.innerHTML += `
+    <a id="nav-a" href="/products/a">A</a>
+    <a id="nav-b" href="/products/b">B</a>
+    <a id="nav-c" href="/products/c">C</a>
+  `;
+  runtime.initRuntime();
+
+  document.getElementById('nav-a')!.click();
+  await new Promise((r) => setTimeout(r, 10));
+  document.getElementById('nav-b')!.click();
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(seen.length, 2, 'A and B both reached fetch');
+  assert.equal(seen[0].signal.aborted, true, 'B aborted A');
+  assert.equal(seen[1].signal.aborted, false, 'B is still in flight');
+
+  // A's rejection has settled and run its finally block by now.
+  document.getElementById('nav-c')!.click();
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(seen.length, 3, 'C reached fetch');
+  assert.equal(seen[1].signal.aborted, true, 'C aborted B — A did not clear the live controller');
+
+  releases.forEach((release) => release());
+  await new Promise((r) => setTimeout(r, 20));
 });
 
 test('data-pusha-close-on-nav strips [open] from <details> on PJAX leave', async () => {
@@ -1731,7 +1946,7 @@ test("the theme's own cart:mutated still works with the bridge installed", async
 // ─── app-compat interventions (experimental, all default OFF) ───────────────
 // These pin the FLAGS and the SCOPING, not the repair. Whether dispatching a
 // section event or re-executing a bundle actually revives a real app is a
-// storefront measurement — ~/Work/pusha-probe. What is testable here is that the
+// storefront measurement — pusha-probe. What is testable here is that the
 // flags default off, that unload fires while the old nodes are still connected,
 // and that re-execution never touches a theme script. That last one is the
 // guardrail: head-sync's dedupe exists because re-running a theme section script

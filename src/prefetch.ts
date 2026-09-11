@@ -177,10 +177,28 @@ export function prefetchPage(url: string, { force = false } = {}): Promise<void>
         dlog('prefetch', `warm FAILED ${key} (${response.status})`);
         return;
       }
+      // A redirect means this HTML belongs to a different path than the one
+      // asked for. Caching it under the requested key would serve the wrong
+      // page on click. Cross-origin is refused outright — never hold another
+      // origin's markup as if it were this shop's.
+      let cacheKey = key;
+      if (response.url) {
+        try {
+          const final = new URL(response.url);
+          if (final.origin !== window.location.origin) {
+            dlog('prefetch', `warm REFUSED ${key} — cross-origin redirect to ${final.origin}`);
+            return;
+          }
+          cacheKey = toPathKey(final.href);
+          if (cacheKey !== key) dlog('prefetch', `warm redirected ${key} → ${cacheKey}`);
+        } catch {
+          // Unparseable response.url — keep the key we asked for.
+        }
+      }
       const html = await response.text();
-      cache.set(key, { html, cachedAt: Date.now() });
+      cache.set(cacheKey, { html, cachedAt: Date.now() });
       trimCache();
-      dlog('prefetch', `cached ${key} (${html.length} bytes)`);
+      dlog('prefetch', `cached ${cacheKey} (${html.length} bytes)`);
       warmCriticalImages(html);
     } catch (err) {
       // Prefetch failures are silent — main nav will fetch normally.
@@ -198,6 +216,11 @@ function shouldPrefetchLink(link: Element): boolean {
   if (link.tagName !== 'A') return false;
   const anchor = link as HTMLAnchorElement;
   if (!anchor.href) return false;
+  // `href="#"` / `href=""` resolve to the current URL, so warming them spends a
+  // request on the page the buyer is already looking at. They are buttons, not
+  // links — runtime.ts declines to intercept them for the same reason.
+  const rawHref = anchor.getAttribute('href')?.trim() ?? '';
+  if (rawHref === '' || rawHref === '#') return false;
   if (anchor.hasAttribute('data-no-transition')) return false;
   if (anchor.closest('[data-no-transition]')) return false;
   if (anchor.target === '_blank') return false;

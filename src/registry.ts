@@ -53,9 +53,15 @@ export class ComponentRegistry {
     let setupCount = 0;
     this.components.forEach((component, name) => {
       if (component.setupGlobal && !this.globalSetupDone.has(name)) {
-        component.setupGlobal();
+        // Mark it done before calling, so a thrower is not retried on every
+        // navigation for the rest of the session.
         this.globalSetupDone.add(name);
-        setupCount++;
+        try {
+          component.setupGlobal();
+          setupCount++;
+        } catch (err) {
+          console.warn(`[pusha] component "${name}" setupGlobal() threw`, err);
+        }
       }
     });
     if (setupCount) dlog('registry', `setupGlobal: ${setupCount} components`);
@@ -64,14 +70,25 @@ export class ComponentRegistry {
   initAll(root: HTMLElement | Document = document, disabled?: ReadonlySet<string>): void {
     let inited = 0;
     let skipped = 0;
+    let failed = 0;
     this.components.forEach((component, name) => {
       if (disabled?.has(name)) {
         skipped++;
         return;
       }
-      component.init(root);
-      inited++;
+      // A component that throws must not stop the components after it, and
+      // must not propagate into the caller. At boot `initAll` runs before the
+      // click listener is installed, so an uncaught throw here used to mean
+      // PJAX silently never started at all.
+      try {
+        component.init(root);
+        inited++;
+      } catch (err) {
+        failed++;
+        console.warn(`[pusha] component "${name}" init() threw`, err);
+      }
     });
+    if (failed) console.warn(`[pusha] ${failed} component(s) failed to init — the rest are live`);
     if (inited || skipped) dlog('registry', `initAll: ${inited} components, ${skipped} disabled`);
   }
 

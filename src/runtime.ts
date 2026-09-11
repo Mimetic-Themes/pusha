@@ -89,6 +89,14 @@ function shouldInterceptLink(link: Element): boolean {
   if (link.tagName !== 'A') return false;
   const anchor = link as HTMLAnchorElement;
   if (!anchor.href) return false;
+  // `href="#"` and `href=""` resolve to the current URL with an EMPTY hash, so
+  // every check below reads them as a click on the page you are already on.
+  // The same-URL branch in handleLinkClick would then preventDefault() and
+  // scroll to top from the capture phase — before the theme's own handler
+  // runs. Stock Dawn ships this shape in its localization form triggers, and
+  // app widgets use it constantly. These are buttons, not links: leave them be.
+  const rawHref = anchor.getAttribute('href')?.trim() ?? '';
+  if (rawHref === '' || rawHref === '#') return false;
   if (anchor.hasAttribute('data-no-transition')) return false;
   if (anchor.closest('[data-no-transition]')) return false;
   if (anchor.target === '_blank') return false;
@@ -197,12 +205,55 @@ function waitForCssTransition(element: HTMLElement | null, timeout = TRANSITION_
   });
 }
 
+// Reject a promise that never settles. Distinct error name so the catch below
+// can tell a hung request from a user-superseded one: a timeout falls through
+// to a real browser navigation, an abort returns silently.
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  if (!ms || ms <= 0) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const err = new Error(`${label} timed out after ${ms}ms`);
+      err.name = 'TimeoutError';
+      reject(err);
+    }, ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+// fetch() follows redirects transparently, so the body can come from a
+// different path than the one clicked — Shopify's URL redirects do this on
+// every handle change. Recording the clicked href would leave the address bar
+// pointing at a page the buyer is not looking at, and would cache the HTML
+// under the wrong key. A cross-origin landing is worse: its markup would be
+// parsed and its scripts injected into the shop's own origin, so refuse it and
+// let the browser perform a real navigation instead.
+function resolveFinalUrl(response: Response, requested: URL): URL {
+  if (!response.url) return requested;
+  let final: URL;
+  try {
+    final = new URL(response.url);
+  } catch {
+    return requested;
+  }
+  if (final.origin !== window.location.origin) {
+    throw new Error(`cross-origin redirect to ${final.origin}`);
+  }
+  if (final.href === requested.href) return requested;
+  // fetch() drops the fragment; the buyer's own hash still applies.
+  final.hash = requested.hash;
+  dlog('nav', `redirected ${requested.pathname} → ${final.pathname}`);
+  return final;
+}
+
 // ─── Core navigation ──────────────────────────────────────────────────────────
 
 async function navigate(url: string, options: { isPopState?: boolean; replace?: boolean; forced?: string } = {}): Promise<void> {
   const config = getConfig();
-  const targetUrl = new URL(url, window.location.href);
-  const href = targetUrl.pathname + targetUrl.search + targetUrl.hash;
+  let targetUrl = new URL(url, window.location.href);
+  let href = targetUrl.pathname + targetUrl.search + targetUrl.hash;
   const navStart = (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
   if (isTransitioning && currentNavigation) {
@@ -239,6 +290,7 @@ async function navigate(url: string, options: { isPopState?: boolean; replace?: 
   // Treat `transitions: false` like reduced motion — skip the class dance and
   // any CSS transition wait. Page swaps instantly, no fade.
   const reducedMotion = prefersReducedMotion() || config.transitions === false;
+  const navTimeout = config.timeout ?? 0;
 
   try {
     const cached = getCachedHtml(url);
@@ -264,9 +316,19 @@ async function navigate(url: string, options: { isPopState?: boolean; replace?: 
 
     let leavePromise: Promise<void> = Promise.resolve();
     if (!reducedMotion) {
-      const leaveResult = transition?.leave?.(currentContainer, leaveMeta) ?? null;
+      // A custom transition is decoration. If it throws — a missing animation
+      // library is the common case — fall through to the CSS class path rather
+      // than hard-reloading the page out from under the buyer.
+      let leaveResult: unknown = null;
+      try {
+        leaveResult = transition?.leave?.(currentContainer, leaveMeta) ?? null;
+      } catch (err) {
+        console.warn(`[pusha] transition "${transitionName}" leave() threw; using CSS fallback`, err);
+      }
       if (leaveResult && typeof (leaveResult as Promise<void>).then === 'function') {
-        leavePromise = leaveResult as Promise<void>;
+        leavePromise = (leaveResult as Promise<void>).catch((err) => {
+          console.warn(`[pusha] transition "${transitionName}" leave() rejected; continuing`, err);
+        });
       } else {
         if (isCached) {
           document.documentElement.setAttribute('data-cached-nav', '');
@@ -285,7 +347,7 @@ async function navigate(url: string, options: { isPopState?: boolean; replace?: 
       // ~the same wall time as firing a fresh fetch (network is the bottleneck)
       // but saves the duplicate round-trip and bandwidth.
       dlog('nav', `awaiting in-flight prefetch for ${href} (race avoided)`);
-      htmlPromise = (async () => {
+      htmlPromise = withTimeout((async () => {
         await inFlightPrefetch;
         const fresh = getCachedHtml(url);
         if (fresh !== null) return fresh;
@@ -296,23 +358,34 @@ async function navigate(url: string, options: { isPopState?: boolean; replace?: 
           signal: controller.signal,
         });
         if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        targetUrl = resolveFinalUrl(response, targetUrl);
+        href = targetUrl.pathname + targetUrl.search + targetUrl.hash;
         return response.text();
-      })();
+      })(), navTimeout, `navigation to ${href}`);
     } else {
-      const response = await fetch(href, {
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
-      htmlPromise = response.text();
+      htmlPromise = withTimeout((async () => {
+        const response = await fetch(href, {
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+        targetUrl = resolveFinalUrl(response, targetUrl);
+        href = targetUrl.pathname + targetUrl.search + targetUrl.hash;
+        return response.text();
+      })(), navTimeout, `navigation to ${href}`);
     }
 
     const [html] = await Promise.all([htmlPromise, leavePromise]);
 
     if (controller.signal.aborted) {
-      isTransitioning = false;
-      document.documentElement.classList.remove('is-transitioning-out');
-      document.documentElement.removeAttribute('data-cached-nav');
+      // A newer navigation superseded this one. Only reset shared state if we
+      // still own it — otherwise we strip the transition classes off the
+      // navigation that replaced us, mid-transition.
+      if (currentNavigation === controller) {
+        isTransitioning = false;
+        document.documentElement.classList.remove('is-transitioning-out');
+        document.documentElement.removeAttribute('data-cached-nav');
+      }
       return;
     }
 
@@ -415,9 +488,18 @@ async function navigate(url: string, options: { isPopState?: boolean; replace?: 
 
     if (!reducedMotion) {
       await waitForEagerImages(fresh);
-      const enterResult = transition?.enter?.(fresh, leaveMeta) ?? null;
+      // The DOM is already swapped and the URL already pushed by this point, so
+      // a throw here used to hard-reload a page the buyer was already reading.
+      let enterResult: unknown = null;
+      try {
+        enterResult = transition?.enter?.(fresh, leaveMeta) ?? null;
+      } catch (err) {
+        console.warn(`[pusha] transition "${transitionName}" enter() threw; using CSS fallback`, err);
+      }
       if (enterResult && typeof (enterResult as Promise<void>).then === 'function') {
-        await (enterResult as Promise<void>);
+        await (enterResult as Promise<void>).catch((err) => {
+          console.warn(`[pusha] transition "${transitionName}" enter() rejected; continuing`, err);
+        });
       } else {
         document.documentElement.classList.remove('is-transitioning-out');
         document.documentElement.classList.add('is-transitioning-in');
@@ -433,12 +515,20 @@ async function navigate(url: string, options: { isPopState?: boolean; replace?: 
     console.warn('[pusha] navigation failed, falling back to full nav:', error);
     window.location.href = href;
   } finally {
-    isTransitioning = false;
-    currentNavigation = null;
-    stopLoading();
-    // The container may have been replaced by the swap, so clear the flag on
-    // whichever element is live now rather than the one captured above.
-    getContainer()?.removeAttribute('aria-busy');
+    // Only tear down shared state if this navigation still owns it. When a
+    // second click aborts this one, `currentNavigation` already points at the
+    // superseding controller. Clearing unconditionally would drop
+    // `isTransitioning` while that navigation is still in flight, and a third
+    // click would then find nothing to abort — two navigations swap, and the
+    // URL bar and the content end up from different pages.
+    if (currentNavigation === controller) {
+      isTransitioning = false;
+      currentNavigation = null;
+      stopLoading();
+      // The container may have been replaced by the swap, so clear the flag on
+      // whichever element is live now rather than the one captured above.
+      getContainer()?.removeAttribute('aria-busy');
+    }
   }
 }
 
@@ -544,6 +634,18 @@ function handleLinkClick(event: MouseEvent): void {
 }
 
 function handlePopState(): void {
+  const target = new URL(window.location.href);
+  const current = new URL(currentPageUrl || window.location.href, window.location.href);
+  // Same path and query, different fragment: an in-page anchor click, or Back
+  // between two hashes of one page. The document is already correct. Refetching
+  // it would swap the container out from under the buyer, lose their place, and
+  // fire a pageview for a page they never left. Move the scroll, nothing else.
+  if (target.pathname === current.pathname && target.search === current.search) {
+    currentPageUrl = target.href;
+    if (!target.hash || !scrollToHash(target.hash)) restoreScroll(target.href);
+    dlog('nav', `popstate within ${target.pathname} — scroll only, no refetch`);
+    return;
+  }
   void navigate(window.location.href, { isPopState: true });
 }
 
