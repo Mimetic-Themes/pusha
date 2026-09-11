@@ -42,11 +42,16 @@ export async function revalidateIslands(
   const started = (typeof performance !== 'undefined' ? performance.now() : Date.now());
   dlog('islands', `revalidating ${islands.length}: ${islands.map((i) => i.sectionId).join(', ')}`);
 
-  const params = new URLSearchParams({
-    sections: islands.map((i) => i.sectionId).join(','),
-  });
-  const sep = currentUrl.includes('?') ? '&' : '?';
-  const url = `${currentUrl}${sep}${params.toString()}`;
+  // Build through URL, not string concatenation. `currentUrl` carries the
+  // fragment, so appending `?sections=…` to it put the query INSIDE the hash —
+  // the server saw a plain page request, returned HTML, res.json() threw, and
+  // the catch below swallowed it. Islands silently never revalidated on any
+  // #hash URL. The fragment is dropped here because it never changes what the
+  // Section Rendering API returns.
+  const target = new URL(currentUrl, window.location.href);
+  target.hash = '';
+  target.searchParams.set('sections', islands.map((i) => i.sectionId).join(','));
+  const url = target.href;
 
   islands.forEach(({ islandEl }) => islandEl.classList.add('is-revalidating'));
 

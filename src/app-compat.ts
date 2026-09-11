@@ -26,7 +26,19 @@ const SECTION_ID_PREFIX = 'shopify-section-';
 // it is what keeps intervention 2 from re-executing THEME scripts, which is the
 // thing head-sync's dedupe exists to prevent (top-level `class` redeclaration —
 // see src/head-sync.ts and commit fd7ec17).
-const EXTENSION_ASSET = /\/\/cdn\.shopify\.com\/extensions\//;
+// Host-anchored on purpose. As a bare substring this matched
+// `https://evil.example//cdn.shopify.com/extensions/x.js`, which would carve an
+// attacker-controlled URL out of head-sync's dedupe and re-execute it on every
+// navigation. Reaching it needs an already-injected script tag, but the narrow
+// scoping IS the safety story for this flag.
+function isExtensionAsset(rawSrc: string): boolean {
+  try {
+    const url = new URL(rawSrc, window.location.href);
+    return url.host === 'cdn.shopify.com' && url.pathname.startsWith('/extensions/');
+  } catch {
+    return false;
+  }
+}
 
 function sectionElements(root: ParentNode): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(`[id^="${SECTION_ID_PREFIX}"]`));
@@ -107,7 +119,7 @@ export async function reexecuteExtensionScripts(
   if (!cfg?.reexecuteExtensionScripts) return;
 
   const sources = Array.from(newDoc.querySelectorAll<HTMLScriptElement>('script[src]')).filter(
-    (el) => EXTENSION_ASSET.test(new URL(el.getAttribute('src')!, window.location.href).href),
+    (el) => isExtensionAsset(el.getAttribute('src')!),
   );
   if (sources.length === 0) return;
 

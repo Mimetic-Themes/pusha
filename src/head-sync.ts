@@ -157,7 +157,12 @@ export async function syncHeadScripts(newDoc: Document): Promise<void> {
 // have loaded (or the 2s timeout elapses, so a broken sheet doesn't pin
 // navigation forever).
 export async function syncHeadStyles(newDoc: Document): Promise<void> {
-  const newLinks = Array.from(newDoc.head.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'));
+  // Scan the whole document, not just <head>. Shopify's `stylesheet_tag` filter
+  // emits the link inside the section body, so a head-only scan missed every
+  // section stylesheet — Dawn ships 39 of them — and the first visit to each
+  // template rendered unstyled until something else pulled the sheet in.
+  // Mirrors syncHeadScripts, which already scans the whole document.
+  const newLinks = Array.from(newDoc.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'));
 
   window.__pushaSyncedStyles = window.__pushaSyncedStyles ?? new Set<string>();
 
@@ -167,7 +172,17 @@ export async function syncHeadStyles(newDoc: Document): Promise<void> {
     const href = newLink.getAttribute('href');
     if (!href) return;
 
-    const alreadyPresent = document.head.querySelector(`link[rel="stylesheet"][href="${href}"]`);
+    // Dedupe across swaps, not just against what is in <head> right now: a
+    // section stylesheet arrives inside the swapped container and is destroyed
+    // with it while its rules stay applied. __pushaSyncedStyles was written and
+    // never read, so those were re-appended on every return visit.
+    if (window.__pushaSyncedStyles!.has(href)) return;
+
+    // CSS.escape, because an href may legitimately contain a quote or bracket.
+    // Unescaped it throws SyntaxError, which aborts the navigation and drops
+    // that page to a full browser load with no explanation.
+    const escaped = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(href) : href.replace(/["\\]/g, '\\$&');
+    const alreadyPresent = document.head.querySelector(`link[rel="stylesheet"][href="${escaped}"]`);
     if (!alreadyPresent) {
       const clone = newLink.cloneNode(true) as HTMLLinkElement;
       loadPromises.push(
