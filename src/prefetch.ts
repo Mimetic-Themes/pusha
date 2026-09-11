@@ -160,6 +160,31 @@ function warmCriticalImages(html: string): void {
   }
 }
 
+// Prefetch is speculative work on someone else's behalf, so it must never be
+// the reason a real request fails. Nav-link warmup alone fires six at once, and
+// viewport warming can queue a whole collection page; against `shopify theme
+// dev` — a single local proxy — that burst returns 502s, and the 502s hit the
+// theme's own fetches too. A developer evaluating Pusha sees it break the theme.
+// Two in flight keeps the win and leaves the connection budget for real
+// navigation, which always bypasses this queue.
+const MAX_CONCURRENT_PREFETCH = 2;
+let activePrefetches = 0;
+const prefetchQueue: Array<() => void> = [];
+
+function acquirePrefetchSlot(): Promise<void> {
+  if (activePrefetches < MAX_CONCURRENT_PREFETCH) {
+    activePrefetches++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => prefetchQueue.push(resolve));
+}
+
+function releasePrefetchSlot(): void {
+  const next = prefetchQueue.shift();
+  if (next) next();
+  else activePrefetches--;
+}
+
 export function prefetchPage(url: string, { force = false } = {}): Promise<void> {
   const key = toPathKey(url);
   if (!force && cache.has(key)) return Promise.resolve();
@@ -167,9 +192,13 @@ export function prefetchPage(url: string, { force = false } = {}): Promise<void>
   const existing = inFlight.get(key);
   if (existing) return existing;
 
-  dlog('prefetch', `warming ${key}`);
   const promise = (async () => {
+    await acquirePrefetchSlot();
     try {
+      // Checked again after waiting for a slot: a real navigation may have
+      // fetched this page while we queued, which makes the warm pure waste.
+      if (!force && cache.has(key)) return;
+      dlog('prefetch', `warming ${key}`);
       const response = await fetch(key, {
         headers: { 'X-Requested-With': 'XMLHttpRequest' },
       });
@@ -208,6 +237,8 @@ export function prefetchPage(url: string, { force = false } = {}): Promise<void>
     } catch (err) {
       // Prefetch failures are silent — main nav will fetch normally.
       dlog('prefetch', `warm threw ${key}`, err);
+    } finally {
+      releasePrefetchSlot();
     }
   })().finally(() => {
     inFlight.delete(key);
@@ -352,6 +383,8 @@ export function _resetPrefetchForTests(): void {
   cache.clear();
   inFlight.clear();
   warmedFrom.clear();
+  activePrefetches = 0;
+  prefetchQueue.length = 0;
 }
 
 // Eager nav-link warmup. Runs at requestIdleCallback time on initial load

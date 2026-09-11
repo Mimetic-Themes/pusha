@@ -707,6 +707,72 @@ test('a stylesheet href containing a quote does not abort the navigation', async
   assert.equal(window.location.pathname, '/products/bar');
 });
 
+test('prefetch never runs more than two requests at once', async () => {
+  // Live finding: nav-link warmup plus viewport warming burst against
+  // `shopify theme dev` and it starts returning 502s — which then break the
+  // theme's own fetches. Speculative work must never be why a real request
+  // fails. Fetches here resolve on their own timer rather than on demand, so
+  // the test can never strand a promise the way a manual gate can.
+  let inFlight = 0;
+  let peak = 0;
+  let served = 0;
+
+  (globalThis as Record<string, unknown>).fetch = () => {
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    return new Promise<Response>((resolve) => {
+      setTimeout(() => {
+        inFlight--;
+        served++;
+        resolve(new Response(makePageHtml('product', '<h1>x</h1>'), {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        }));
+      }, 15);
+    });
+  };
+
+  // No initRuntime: nav-link warmup would add its own traffic and blur the
+  // measurement. The limiter is what is under test.
+  const prefetch = await import('../src/prefetch.ts');
+  await Promise.all(['/a', '/b', '/c', '/d', '/e', '/f'].map((path) => prefetch.prefetchPage(path)));
+
+  assert.equal(served, 6, 'every warm was served — none dropped');
+  assert.equal(peak, 2, `at most two concurrent — saw ${peak}`);
+  assert.equal(inFlight, 0, 'no slot left held');
+});
+
+test('a redirect log fires only when the page actually moved', async () => {
+  // `response.url` never carries a fragment, so comparing before restoring it
+  // made every #hash navigation report as a redirect.
+  const logs: string[] = [];
+  const originalWarn = console.warn;
+  fetchResponder = () => ({ status: 200, body: makePageHtml('product', '<h1>Product</h1>') });
+
+  const diagnostics = await import('../src/diagnostics.ts');
+  diagnostics.setDebug(true);
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => logs.push(args.join(' '));
+  try {
+    document.body.insertAdjacentHTML('beforeend', '<a id="hashed" href="/products/foo#reviews">Foo</a>');
+    runtime.initRuntime({ debug: true });
+    document.getElementById('hashed')!.click();
+    await new Promise((r) => setTimeout(r, 60));
+  } finally {
+    console.log = originalLog;
+    console.warn = originalWarn;
+    diagnostics.setDebug(false);
+  }
+
+  assert.equal(
+    logs.some((l) => l.includes('redirected')),
+    false,
+    `a hash navigation is not a redirect — got ${JSON.stringify(logs.filter((l) => l.includes('redirect')))}`,
+  );
+  assert.equal(window.location.pathname, '/products/foo');
+  assert.equal(window.location.hash, '#reviews', 'the fragment survives');
+});
+
 test('a navigation that never resolves falls back to a full browser load', async () => {
   // Without a cap the container sits faded at opacity 0 forever: the fetch never
   // settles, so neither the swap nor the error path ever runs.

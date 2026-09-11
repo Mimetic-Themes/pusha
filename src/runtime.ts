@@ -241,10 +241,12 @@ function resolveFinalUrl(response: Response, requested: URL): URL {
   if (final.origin !== window.location.origin) {
     throw new Error(`cross-origin redirect to ${final.origin}`);
   }
-  if (final.href === requested.href) return requested;
-  // fetch() drops the fragment; the buyer's own hash still applies.
+  // Restore the fragment BEFORE comparing. `response.url` never carries one, so
+  // comparing first made every hash navigation look like a redirect — a log line
+  // that lied, on the exact URLs most likely to be scrutinised.
   final.hash = requested.hash;
-  dlog('nav', `redirected ${requested.pathname} → ${final.pathname}`);
+  if (final.href === requested.href) return requested;
+  dlog('nav', `redirected ${requested.pathname}${requested.search} → ${final.pathname}${final.search}`);
   return final;
 }
 
