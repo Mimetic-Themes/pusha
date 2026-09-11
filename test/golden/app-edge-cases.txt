@@ -104,14 +104,17 @@ whitelists: on (default — pass --no-whitelist to disable)
   Pass --no-whitelist to disable all of the above and see raw findings.
 
 ## Next steps
-  An agent reading this audit can transform the findings without the pusha skill installed.
-  Suggested order:
-    1. K   (mechanical: add data-pusha-cleanup attribute to each render site listed above)
-    2. F2  (procedural {% javascript %} — apply the fix for its [location] tag, see "Fix by location")
-    3. E   (procedural inline <script> — same, routed by its [location] tag)
-    4. G   (DOMContentLoaded — replace per its [location] tag, see "Fix by location")
-    5. D   (add disconnectedCallback or wrap as a section to reach registry.destroy)
-    6. H   (human review — these are the risky ones; check reachability first)
+  This report is written to be worked by a coding agent. In --json every finding
+  carries a stable `id` and an `action`, and `queue` lists the work in order.
+  Install the rules it applies with: pusha skill --claude
+
+    transform    1   Lx1
+                     Apply the documented fix. Mechanical — the rule is in remediationByLocation or bucketRules.
+    decide       1   Xx1
+                     Do not guess. Surface to the supervising human with the surrounding code and the options.
+
+    pusha audit --json --action transform   # the mechanical queue, in order
+    pusha audit --json --action decide      # the calls that are yours to make
 
   Transformation contracts by location (every E/F2/G/H finding carries a [location] tag):
     section     — data-section-type="<handle>" on the root; window.theme.sectionInits[handle] = (root) => {…};

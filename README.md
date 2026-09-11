@@ -48,6 +48,28 @@ The audit is deterministic and emits `--json`, so the agent gets a work queue ra
 
 Re-run `pusha audit` when the agent is done. Findings should have moved into the safe buckets.
 
+### What the agent actually reads
+
+`pusha audit --json` is the interface. Every finding carries:
+
+| Field | |
+|---|---|
+| `id` | Stable across the edits the agent itself makes. Line numbers are excluded from it on purpose, so a half-finished port can be resumed. |
+| `action` | `transform` — apply the documented fix. `decide` — don't guess, surface it to the human. `verify` — check on a real storefront. `none` — safe, or not yours to change. |
+| `bucket` | The classification. `bucketRules` explains each one; `remediationByLocation` carries the fix. |
+
+Top level adds `queue` (finding ids in work order, mechanical first, `none` omitted) and `doNotTransform` (the buckets an agent must leave alone, and why — app code you don't own is the main one).
+
+Filters cut the payload to one slice, so an orchestrator can hand each worker its own queue instead of every worker reading the whole theme:
+
+```sh
+pusha audit --json --action transform        # the mechanical queue
+pusha audit --json --bucket E,G --file sections/
+pusha audit --json --action decide           # what needs your call
+```
+
+On a Dawn-shaped theme that's the difference between 123 kB and 16 kB per turn. `pusha audit --help` has the full contract.
+
 ## Checking it works
 
 Push the theme and click around. To watch what Pusha does, set `debug: true` in `snippets/pusha.liquid` and open the console.
