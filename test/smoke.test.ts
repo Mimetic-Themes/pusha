@@ -742,6 +742,44 @@ test('prefetch never runs more than two requests at once', async () => {
   assert.equal(inFlight, 0, 'no slot left held');
 });
 
+test('peekInFlight ignores a warm that is still queued for a slot', async () => {
+  // The stall that motivated this: two warms hold both slots of
+  // MAX_CONCURRENT_PREFETCH and never resolve, so a third is queued with no
+  // bytes on the wire. navigate() must not await it — it has not started.
+  const release: Array<() => void> = [];
+  (globalThis as Record<string, unknown>).fetch = () =>
+    new Promise<Response>((resolve) => {
+      release.push(() =>
+        resolve(new Response(makePageHtml('product', '<h1>x</h1>'), {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        })),
+      );
+    });
+
+  const prefetch = await import('../src/prefetch.ts');
+  void prefetch.prefetchPage('/a');
+  void prefetch.prefetchPage('/b');
+  void prefetch.prefetchPage('/queued');
+  // Let the two that won slots reach fetch().
+  await new Promise((r) => setTimeout(r, 0));
+
+  assert.equal(release.length, 2, 'exactly two warms are on the wire');
+  assert.notEqual(prefetch.peekInFlight('/a'), null, 'a started warm is still offered');
+  assert.equal(
+    prefetch.peekInFlight('/queued'),
+    null,
+    'a queued warm is withheld — awaiting it would stall the navigation',
+  );
+
+  // Once a slot frees and the queued warm starts, it becomes dedup-worthy.
+  release[0]();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.notEqual(prefetch.peekInFlight('/queued'), null, 'offered once it starts');
+
+  release.forEach((fn) => fn());
+});
+
 test('a redirect log fires only when the page actually moved', async () => {
   // `response.url` never carries a fragment, so comparing before restoring it
   // made every #hash navigation report as a redirect.

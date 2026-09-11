@@ -81,6 +81,21 @@ export function setupDom(initialTemplate = 'index', initialBody = '<h1>Home</h1>
     (globalThis as Record<string, unknown>).CSS = { escape: (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, '\\$&') };
   }
 
+  // jsdom never fires load or error on an injected <link rel="stylesheet">, so
+  // syncHeadStyles waits out its full 2s cap on every test that syncs one — 4s
+  // of suite time across two tests. A real browser fires load, so this restores
+  // browser behaviour rather than shortening a product timeout for the tests.
+  const styleLoads = new w.MutationObserver((records) => {
+    for (const record of records) {
+      record.addedNodes.forEach((node) => {
+        const el = node as HTMLLinkElement;
+        if (el.tagName !== 'LINK' || el.getAttribute('rel') !== 'stylesheet') return;
+        setTimeout(() => el.dispatchEvent(new w.Event('load')), 0);
+      });
+    }
+  });
+  styleLoads.observe(w.document.head, { childList: true });
+
   // jsdom doesn't implement scrollTo; stub to avoid Not implemented warnings.
   w.scrollTo = (() => {}) as typeof w.scrollTo;
 
@@ -88,6 +103,7 @@ export function setupDom(initialTemplate = 'index', initialBody = '<h1>Home</h1>
   (w.history as unknown as { scrollRestoration: ScrollRestoration }).scrollRestoration = 'auto';
 
   const reset = () => {
+    styleLoads.disconnect();
     dom.window.close();
   };
 

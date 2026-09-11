@@ -19,6 +19,10 @@ const CACHE_MAX_ENTRIES = 32;
 
 const cache = new Map<string, CacheEntry>();
 const inFlight = new Map<string, Promise<void>>();
+// Keys whose fetch has actually begun. A warm sits in `inFlight` from the
+// moment it is requested, but does not reach the network until it acquires a
+// concurrency slot — see peekInFlight for why the difference matters.
+const started = new Set<string>();
 
 function trimCache(): void {
   while (cache.size > CACHE_MAX_ENTRIES) {
@@ -114,12 +118,25 @@ export function getCachedHtml(url: string): string | null {
   return entry.html;
 }
 
-// Sync probe — returns the in-flight prefetch promise for `url` if one is
-// active, else null. Used by runtime.navigate() to dedup against an in-flight
-// hover/touch warmup: if the user clicks a link mid-warmup, we await the
-// prefetch instead of firing a duplicate fetch.
+// Sync probe — returns the prefetch promise for `url` only if its fetch is
+// already on the wire, else null. Used by runtime.navigate() to dedup against
+// an in-flight hover/touch warmup: if the user clicks a link mid-warmup,
+// awaiting it costs ~the same wall time and saves the duplicate round-trip.
+//
+// The `started` gate is load-bearing. A warm is in `inFlight` from the moment
+// it is requested, but MAX_CONCURRENT_PREFETCH may leave it queued behind two
+// others without a single byte sent. Returning it then makes a real navigation
+// wait on work that has not begun — the exact opposite of the guarantee the
+// limiter above claims ("real navigation always bypasses this queue"), and on a
+// slow connection it is a user-visible stall bounded only by the nav timeout.
+//
+// Bypassing costs at most one speculative duplicate: the queued warm still runs
+// later for a page the buyer has already navigated to. That is strictly the
+// better trade — wasted bandwidth on a background request beats a stalled click.
 export function peekInFlight(url: string): Promise<void> | null {
-  return inFlight.get(toPathKey(url)) ?? null;
+  const key = toPathKey(url);
+  if (!started.has(key)) return null;
+  return inFlight.get(key) ?? null;
 }
 
 export function invalidateCache(predicate?: (url: string) => boolean): void {
@@ -194,6 +211,7 @@ export function prefetchPage(url: string, { force = false } = {}): Promise<void>
 
   const promise = (async () => {
     await acquirePrefetchSlot();
+    started.add(key);
     try {
       // Checked again after waiting for a slot: a real navigation may have
       // fetched this page while we queued, which makes the warm pure waste.
@@ -242,6 +260,7 @@ export function prefetchPage(url: string, { force = false } = {}): Promise<void>
     }
   })().finally(() => {
     inFlight.delete(key);
+    started.delete(key);
   });
 
   inFlight.set(key, promise);
@@ -382,6 +401,7 @@ export function _resetPrefetchForTests(): void {
   clearHoverTimeout();
   cache.clear();
   inFlight.clear();
+  started.clear();
   warmedFrom.clear();
   activePrefetches = 0;
   prefetchQueue.length = 0;
