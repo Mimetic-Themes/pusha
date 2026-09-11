@@ -7,6 +7,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
+import { createHash } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = resolve(__dirname, '..');
@@ -38,11 +39,16 @@ init options:
 
 audit options:
   --json                Emit machine-readable JSON instead of text
+  --bucket <A,B,...>    Only these buckets          (--json only)
+  --action <name,...>   Only these actions          (--json only)
+                        transform | decide | verify | none
+  --file <substring>    Only findings whose path contains this  (--json only)
   --full                Append the full PATTERNS.md to the audit output (one
                         self-contained doc an agent can absorb in one read)
   --no-whitelist        Disable false-positive filters (canonical Pusha patterns,
                         Pusha-self files, fallback DOMContentLoaded handlers)
                         and show all raw findings
+  --help                Detail on the JSON contract and the filters
   path                  Theme directory to audit (defaults to cwd)
 
 skill options:
@@ -60,6 +66,46 @@ Pusha is not published yet — install it from the repository:
   npm install github:mimetic-themes/pusha
 
 Docs: https://github.com/mimetic-themes/pusha
+`;
+
+const AUDIT_USAGE = `
+pusha audit — classify a theme's scripts for Pusha-readiness.
+
+  pusha audit [path] [options]
+
+The report is written to be consumed by a coding agent. Every finding in --json
+carries:
+
+  id        stable across the edits the agent itself makes — line numbers are
+            excluded from it on purpose, so progress survives a rewrite
+  action    what the agent should do:
+              transform  apply the documented fix; the rule is in
+                         remediationByLocation or bucketRules
+              decide     do not guess — surface it to the human with context
+              verify     not answerable from source; check on a real storefront
+              none       already safe, or not yours to change; do not edit
+  bucket    the classification, explained in bucketRules
+  file,line where it is (line is for humans; address findings by id)
+
+Top level adds \`queue\`: finding ids in work order, mechanical first, with every
+action:none finding omitted. \`doNotTransform\` names the buckets an agent must
+leave alone and why.
+
+Filters (--json only) cut the payload to the slice you are about to work on,
+which is the difference between one agent reading everything and an
+orchestrator handing each worker its own queue:
+
+  pusha audit --json --action transform          # the whole mechanical queue
+  pusha audit --json --bucket E,G --file sections/
+  pusha audit --json --action decide             # what the human must rule on
+
+A filtered response drops the whitelists, app surfaces and analytics blocks,
+and carries bucketRules and remediationByLocation for the matched buckets only.
+
+Examples:
+  pusha audit                        # full text report
+  pusha audit ../dawn --json         # everything, structured
+  pusha audit --full                 # text report plus PATTERNS.md inline
 `;
 
 // ─── tiny logger ────────────────────────────────────────────────────────────
@@ -2149,14 +2195,36 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
   }
 
   out += `## Next steps${NL}`;
-  out += `  An agent reading this audit can transform the findings without the pusha skill installed.${NL}`;
-  out += `  Suggested order:${NL}`;
-  out += `    1. K   (mechanical: add data-pusha-cleanup attribute to each render site listed above)${NL}`;
-  out += `    2. F2  (procedural {% javascript %} — apply the fix for its [location] tag, see "Fix by location")${NL}`;
-  out += `    3. E   (procedural inline <script> — same, routed by its [location] tag)${NL}`;
-  out += `    4. G   (DOMContentLoaded — replace per its [location] tag, see "Fix by location")${NL}`;
-  out += `    5. D   (add disconnectedCallback or wrap as a section to reach registry.destroy)${NL}`;
-  out += `    6. H   (human review — these are the risky ones; check reachability first)${NL}${NL}`;
+  out += `  This report is written to be worked by a coding agent. In --json every finding${NL}`;
+  out += `  carries a stable \`id\` and an \`action\`, and \`queue\` lists the work in order.${NL}`;
+  out += `  Install the rules it applies with: pusha skill --claude${NL}${NL}`;
+  // Derived from the same tables the JSON `queue` uses, so the text report and
+  // the machine contract cannot drift apart.
+  const tally = {};
+  for (const [bucket, list] of Object.entries(findings)) {
+    if (!Array.isArray(list)) continue;
+    for (const f of list) {
+      if (!f.action || f.action === 'none') continue;
+      (tally[f.action] ??= {})[bucket] = ((tally[f.action] ?? {})[bucket] ?? 0) + 1;
+    }
+  }
+  const working = ACTION_WORK_ORDER.filter((a) => a !== 'none' && tally[a]);
+  if (working.length === 0) {
+    out += `  Nothing to do — no finding in this theme carries an action.${NL}${NL}`;
+  } else {
+    for (const action of working) {
+      const perBucket = tally[action];
+      const total = Object.values(perBucket).reduce((n, v) => n + v, 0);
+      const breakdown = BUCKET_WORK_ORDER.filter((b) => perBucket[b])
+        .map((b) => `${b}x${perBucket[b]}`)
+        .join('  ');
+      out += `    ${action.padEnd(9)} ${String(total).padStart(4)}   ${breakdown}${NL}`;
+      out += `              ${' '.repeat(4)}   ${AUDIT_ACTIONS[action]}${NL}`;
+    }
+    out += NL;
+    out += `    pusha audit --json --action transform   # the mechanical queue, in order${NL}`;
+    out += `    pusha audit --json --action decide      # the calls that are yours to make${NL}${NL}`;
+  }
   out += `  Transformation contracts by location (every E/F2/G/H finding carries a [location] tag):${NL}`;
   out += `    section     — data-section-type="<handle>" on the root; window.theme.sectionInits[handle] = (root) => {…};${NL}`;
   out += `                  rewrite document.query* → root.query*; guard listeners with data-initialized.${NL}`;
@@ -2201,12 +2269,184 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
   return out;
 }
 
+// ─── agent contract ──────────────────────────────────────────────────────────
+// The audit's consumer is a coding agent, not a person reading a report. Three
+// things make that work: a stable id per finding (so progress survives the edits
+// the agent itself makes), an `action` telling it whether to act or escalate,
+// and a `queue` so the ordering lives here rather than being re-derived.
+//
+// Bump on any change to finding fields, action values, or queue semantics.
+const AUDIT_SCHEMA_VERSION = 1;
+
+const AUDIT_ACTIONS = {
+  transform: 'Apply the documented fix. Mechanical — the rule is in remediationByLocation or bucketRules.',
+  decide: 'Do not guess. Surface to the supervising human with the surrounding code and the options.',
+  verify: 'Cannot be settled from source. Check at runtime on a real storefront and report what you saw.',
+  none: 'Informational. Already safe, or not yours to change. Do not edit.',
+};
+
+// Buckets an agent must never rewrite, and why — restated per-finding as
+// action:none so a filtered query still carries the warning.
+const DO_NOT_TRANSFORM = {
+  A: 'already safe — syncHeadScripts re-loads these',
+  B: 'already safe — JSON data blocks are not executable',
+  C: 'already safe — custom elements re-mount themselves',
+  P: 'inventory of a platform substrate, not a defect list',
+  X: "app code you do not own; it cannot be mechanically transformed",
+};
+
+// Work order. Mechanical buckets first: they are cheap, low-risk, and shrink the
+// report fastest, which keeps a long port legible to the human watching it.
+const BUCKET_WORK_ORDER = ['K', 'F', 'E', 'G', 'M', 'L', 'D', 'H', 'J', 'X', 'C', 'P', 'A', 'B'];
+const ACTION_WORK_ORDER = ['transform', 'decide', 'verify', 'none'];
+
+function actionFor(bucket, f) {
+  // `head-config` is inert configuration in the persistent shell — the
+  // remediation table says leave it alone, so it must not enter the queue.
+  const routed = f.location === 'head-config' ? 'none' : 'transform';
+  switch (bucket) {
+    case 'A': case 'B': case 'C': case 'P': return 'none';
+    case 'E': case 'G': return routed;
+    case 'F': return f.kind === 'F1' ? 'none' : routed;
+    // K is satisfied per render site. A theme that already carries
+    // data-pusha-cleanup everywhere has nothing to do, and must not head the
+    // queue with a task that is finished.
+    case 'K':
+      return Array.isArray(f.sites) && f.sites.some((site) => !site.alreadyMarked)
+        ? 'transform'
+        : 'none';
+    // Two valid answers (disconnectedCallback vs promote to a custom element)
+    // and the choice changes the component's public shape. Human picks.
+    case 'D': return 'decide';
+    case 'H': return 'decide';
+    // Re-firing a pixel means knowing which events that store actually needs.
+    case 'J': return 'decide';
+    case 'L': return f.rank === 'auto' ? 'transform' : f.rank === 'ask' ? 'decide' : 'none';
+    // A custom modal may already own its close behaviour; details/body-class are
+    // a single attribute.
+    case 'M': return f.kind === 'custom-modal' ? 'decide' : 'transform';
+    case 'X': return f.verdict === 'at-risk' ? 'decide' : 'verify';
+    default: return 'decide';
+  }
+}
+
+// Identity that survives the agent's own edits. Line numbers move the moment a
+// file is rewritten, so they are excluded; everything else is normalised and
+// hashed. Repeats within one bucket+file get a suffix so two identical snippets
+// stay addressable.
+function assignFindingIds(findings) {
+  const seen = new Map();
+  for (const [bucket, list] of Object.entries(findings)) {
+    if (!Array.isArray(list)) continue;
+    for (const f of list) {
+      const stable = {};
+      for (const k of Object.keys(f).sort()) {
+        if (k === 'line' || k === 'id' || k === 'action') continue;
+        const v = f[k];
+        stable[k] = typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : v;
+      }
+      const base = createHash('sha1')
+        .update(bucket + '\u0000' + JSON.stringify(stable))
+        .digest('hex')
+        .slice(0, 12);
+      const n = seen.get(base) ?? 0;
+      seen.set(base, n + 1);
+      f.id = n === 0 ? base : `${base}-${n}`;
+      f.action = actionFor(bucket, f);
+    }
+  }
+}
+
+// Not every finding is file-shaped: K is keyed by custom-element class and
+// carries its render sites in `sites`.
+function findingPath(f) {
+  return String(f.file ?? f.definedIn ?? '');
+}
+
+function findingTouches(f, needle) {
+  if (findingPath(f).includes(needle)) return true;
+  return Array.isArray(f.sites) && f.sites.some((site) => String(site.file ?? '').includes(needle));
+}
+
+function buildQueue(findings) {
+  const flat = [];
+  for (const [bucket, list] of Object.entries(findings)) {
+    if (!Array.isArray(list)) continue;
+    for (const f of list) flat.push({ bucket, f });
+  }
+  flat.sort((a, b) => {
+    const byAction = ACTION_WORK_ORDER.indexOf(a.f.action) - ACTION_WORK_ORDER.indexOf(b.f.action);
+    if (byAction) return byAction;
+    const byBucket = BUCKET_WORK_ORDER.indexOf(a.bucket) - BUCKET_WORK_ORDER.indexOf(b.bucket);
+    if (byBucket) return byBucket;
+    const byFile = findingPath(a.f).localeCompare(findingPath(b.f));
+    if (byFile) return byFile;
+    return (a.f.line ?? 0) - (b.f.line ?? 0);
+  });
+  // Only work belongs in the queue. action:none findings stay in `findings`
+  // for context but must never read as a task.
+  return flat.filter(({ f }) => f.action !== 'none').map(({ f }) => f.id);
+}
+
+// Reads `--flag value` and `--flag=value`, and reports which argv entries it
+// consumed so they are not mistaken for the theme path.
+function readFlagValue(args, name) {
+  const consumed = new Set();
+  let value = null;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === name) {
+      value = args[i + 1] ?? null;
+      consumed.add(i);
+      if (value !== null && !value.startsWith('--')) consumed.add(i + 1);
+      else value = null;
+    } else if (a.startsWith(`${name}=`)) {
+      value = a.slice(name.length + 1);
+      consumed.add(i);
+    }
+  }
+  return { value, consumed };
+}
+
 async function runAudit(args) {
+  if (args.includes('--help') || args.includes('-h')) {
+    process.stdout.write(AUDIT_USAGE);
+    return;
+  }
+
   const json = args.includes('--json');
   const full = args.includes('--full');
   const useWhitelists = !args.includes('--no-whitelist');
-  const positional = args.filter((a) => !a.startsWith('--'));
+
+  const bucketArg = readFlagValue(args, '--bucket');
+  const actionArg = readFlagValue(args, '--action');
+  const fileArg = readFlagValue(args, '--file');
+  const consumed = new Set([...bucketArg.consumed, ...actionArg.consumed, ...fileArg.consumed]);
+  const positional = args.filter((a, i) => !a.startsWith('--') && !consumed.has(i));
   const themePath = resolve(positional[0] ?? process.cwd());
+
+  const filter = {
+    buckets: bucketArg.value ? bucketArg.value.split(',').map((b) => b.trim().toUpperCase()).filter(Boolean) : null,
+    actions: actionArg.value ? actionArg.value.split(',').map((a) => a.trim().toLowerCase()).filter(Boolean) : null,
+    file: fileArg.value || null,
+  };
+  const filtering = Boolean(filter.buckets || filter.actions || filter.file);
+
+  // Filters reshape the payload into a work slice; the text report's counts and
+  // legends assume the whole theme. Rather than print a report whose summary
+  // disagrees with its body, say so.
+  if (filtering && !json) {
+    log.err('--bucket, --action and --file only apply to --json output.');
+    log.warn('re-run with --json, or drop the filter to get the full text report');
+    process.exit(1);
+  }
+  for (const a of filter.actions ?? []) {
+    if (!(a in AUDIT_ACTIONS)) {
+      log.err(`unknown --action "${a}".`);
+      log.warn(`expected one of: ${Object.keys(AUDIT_ACTIONS).join(', ')}`);
+      process.exit(1);
+    }
+  }
 
   if (!detectShopifyTheme(themePath)) {
     log.err(`${themePath} doesn't look like a Shopify theme.`);
@@ -2216,12 +2456,50 @@ async function runAudit(args) {
 
   const result = auditTheme(themePath, { useWhitelists });
   result.skillFreshness = getSkillFreshness(themePath);
+  assignFindingIds(result.findings);
 
-  if (json) {
+  if (json && filtering) {
+    const slice = [];
+    for (const [bucket, list] of Object.entries(result.findings)) {
+      if (!Array.isArray(list)) continue;
+      if (filter.buckets && !filter.buckets.includes(bucket)) continue;
+      for (const f of list) {
+        if (filter.actions && !filter.actions.includes(f.action)) continue;
+        if (filter.file && !findingTouches(f, filter.file)) continue;
+        slice.push({ bucket, ...f });
+      }
+    }
+    const order = buildQueue(result.findings);
+    slice.sort((a, b) => {
+      const ia = order.indexOf(a.id), ib = order.indexOf(b.id);
+      return (ia < 0 ? Number.MAX_SAFE_INTEGER : ia) - (ib < 0 ? Number.MAX_SAFE_INTEGER : ib);
+    });
+    const buckets = [...new Set(slice.map((f) => f.bucket))];
+    const pick = (table) => Object.fromEntries(buckets.filter((b) => b in table).map((b) => [b, table[b]]));
     process.stdout.write(JSON.stringify({
+      schemaVersion: AUDIT_SCHEMA_VERSION,
       theme: themePath,
       date: new Date().toISOString(),
       cliVersion: PACKAGE_VERSION,
+      filter,
+      count: slice.length,
+      actions: AUDIT_ACTIONS,
+      findings: slice,
+      bucketRules: pick(BUCKET_RULES),
+      remediationByLocation: pick(REMEDIATION),
+    }, null, 2) + '\n');
+    return;
+  }
+
+  if (json) {
+    process.stdout.write(JSON.stringify({
+      schemaVersion: AUDIT_SCHEMA_VERSION,
+      theme: themePath,
+      date: new Date().toISOString(),
+      cliVersion: PACKAGE_VERSION,
+      actions: AUDIT_ACTIONS,
+      doNotTransform: DO_NOT_TRANSFORM,
+      queue: buildQueue(result.findings),
       findings: result.findings,
       summary: result.summary,
       suppressed: result.suppressed,
