@@ -198,7 +198,13 @@ export async function syncHeadStyles(newDoc: Document): Promise<void> {
 
   if (loadPromises.length > 0) {
     dlog('head', `stylesheets: +${loadPromises.length} new`);
-    const timeout = new Promise<void>((resolve) => setTimeout(resolve, 2000));
+    const timeout = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 2000);
+      // Same reason as the script-load cap above: under Node this Timeout
+      // would otherwise hold the event loop open for the full 2s after the
+      // document is gone.
+      (timer as unknown as { unref?: () => void }).unref?.();
+    });
     await Promise.race([Promise.all(loadPromises), timeout]);
   }
 }
