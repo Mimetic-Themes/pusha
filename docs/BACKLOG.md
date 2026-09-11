@@ -90,11 +90,16 @@ measured conclusion in `docs/STATE-2026-09-11.md` was never wrong (the `init`
 line is the evidence, not the table), but the table said the sanctioned
 vocabulary does not work.
 
-**Fixed in the working tree**, not shipped: the report now waits for
+**Fixed and committed**, not shipped: the report now waits for
 `shopify:page:view` with a 250 ms fallback for themes whose importmap lacks the
-entry. Extension assets need `shopify app deploy` to take effect, and
-`pusha-probe` still has no git history at all — decide both before the next
-probe run, or the next run reads from the stale bundle.
+entry. Extension assets need `shopify app deploy` before a run picks it up, so
+until then the next probe reads the stale bundle.
+
+Two notes on that repo. It has no remote, so its history is local only. And
+`~/Work/pusha-probe` is a stray empty git repo wrapping the real one at
+`~/Work/pusha-probe/pusha-probe` — running git in the wrapper reports an empty
+repository, which is how this backlog came to claim the probe had no commits.
+Delete the outer `.git`.
 
 ### 8. Bucket H still reports the bridge snippet on a ported theme
 
