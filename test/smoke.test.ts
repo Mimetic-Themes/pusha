@@ -545,6 +545,85 @@ test('href="#" and href="" are left alone for the theme to handle', async () => 
   assert.equal(sameUrlEvent.defaultPrevented, true, 'same-URL link is still handled');
 });
 
+test('cleanup runs on every swap, not only in the theme editor', async () => {
+  // Both of these were documented as firing before the container is replaced and
+  // in fact only ran on shopify:section:unload. A section cleaning up through
+  // sectionDestroy leaked on every navigation while looking correct in preview.
+  const calls: string[] = [];
+  let connectedAtDestroy: boolean | null = null;
+
+  registryModule.registry.register('leaky', {
+    init() {},
+    destroy(root) {
+      calls.push('registry.destroy');
+      connectedAtDestroy = (root as HTMLElement).isConnected;
+    },
+  });
+  window.theme = window.theme ?? {};
+  window.theme.sectionDestroy = {
+    hero: (root: HTMLElement) => {
+      calls.push('sectionDestroy.hero');
+      connectedAtDestroy = root.isConnected;
+    },
+  };
+
+  document.querySelector('#MainContent')!.innerHTML =
+    '<div data-section-type="hero">hero</div>';
+
+  runtime.initRuntime();
+  await runtime.go('/products/bar');
+
+  assert.deepEqual(calls, ['sectionDestroy.hero', 'registry.destroy']);
+  assert.equal(connectedAtDestroy, true, 'cleanup sees still-connected DOM');
+});
+
+test('a cleanup handler that throws does not abort the navigation', async () => {
+  registryModule.registry.register('broken-cleanup', {
+    init() {},
+    destroy() {
+      throw new Error('observer already gone');
+    },
+  });
+  window.theme = window.theme ?? {};
+  window.theme.sectionDestroy = {
+    hero: () => {
+      throw new Error('interval already cleared');
+    },
+  };
+  document.querySelector('#MainContent')!.innerHTML =
+    '<div data-section-type="hero">hero</div>';
+
+  let navError: unknown = null;
+  hooks.onNavError((error) => {
+    navError = error;
+  });
+
+  runtime.initRuntime();
+  await runtime.go('/products/bar');
+
+  assert.equal(navError, null, 'the swap still completed');
+  assert.equal(window.location.pathname, '/products/bar');
+});
+
+test('cleanup does not run when the navigation is about to fall back', async () => {
+  // The response has no container, so this nav hard-reloads. Tearing the page
+  // down first would leave the buyer looking at a dead page until it reloads.
+  let destroyed = 0;
+  registryModule.registry.register('counted', {
+    init() {},
+    destroy() {
+      destroyed++;
+    },
+  });
+  fetchResponder = () => ({ status: 200, body: '<!doctype html><html><body><p>no container</p></body></html>' });
+
+  runtime.initRuntime();
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 60));
+
+  assert.equal(destroyed, 0, 'nothing was torn down');
+});
+
 test('a navigation that never resolves falls back to a full browser load', async () => {
   // Without a cap the container sits faded at opacity 0 forever: the fetch never
   // settles, so neither the swap nor the error path ever runs.

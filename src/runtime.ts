@@ -411,6 +411,16 @@ async function navigate(url: string, options: { isPopState?: boolean; replace?: 
     // and any custom elements inside get upgraded against the live registry on
     // creation. Plain cloneNode + replaceWith adopts at insert time, which
     // can miss upgrades for nested custom elements.
+    // Cleanup, while the outgoing nodes are still connected so observers and
+    // intervals can be torn down against live references. Both of these were
+    // documented as running here and in fact only ran in the theme editor, so a
+    // section that cleaned up through `sectionDestroy` — the documented escape
+    // hatch — leaked on every navigation while looking correct in preview.
+    // Placed after the container check above, so a navigation that is about to
+    // fall back to a full load does not tear down the page first.
+    destroySectionsIn(currentContainer);
+    registry.destroyAll(currentContainer);
+
     // EXPERIMENTAL (off by default): let app code clean up while its own nodes
     // are still connected. Ordering is unload → remove → insert → load.
     dispatchSectionUnload(currentContainer, config.appCompat);

@@ -1855,7 +1855,7 @@ const BUCKET_RULES = {
   A: 'Safe. External <script src> tags are re-loaded by Pusha\'s syncHeadScripts on every nav.',
   B: 'Safe. JSON data blocks are non-executable.',
   C: 'Safe (verify). Custom elements with disconnectedCallback clean up automatically.',
-  D: 'Needs cleanup. Add disconnectedCallback OR wrap the section so registry.destroy can fire.',
+  D: 'Needs cleanup — an observer, interval, animation or window-level listener outlives the DOM it references. Best fix: promote to a custom element and tear down in disconnectedCallback, which the browser calls for you. If the markup cannot become a custom element, give the section a data-section-type root and register window.theme.sectionDestroy[handle] = (root) => {...}; Pusha calls it with the node still connected, immediately before the container is replaced.',
   E: 'Procedural inline script that must re-run on each swap. The correct fix depends on where it lives — see "Fix by location" below.',
   F: 'F1 (custom element class) is already safe. F2 (procedural {% javascript %}) must re-run per swap — fix by location, see below.',
   G: 'DOMContentLoaded does not re-fire after a swap. The replacement depends on where the handler lives — see "Fix by location" below.',
