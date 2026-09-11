@@ -19,7 +19,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   (none)
 
 ## E. Procedural inline <script> — wrap by location
-  Procedural inline script that must re-run on each PJAX swap. The correct fix depends on where it lives — see "Fix by location" below.
+  Procedural inline script that must re-run on each swap. The correct fix depends on where it lives — see "Fix by location" below.
   (none)
 
 ## F. {% javascript %} blocks — F1 safe, F2 wrap by location
@@ -27,7 +27,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   (none)
 
 ## G. DOMContentLoaded handlers — replace by location
-  DOMContentLoaded does not re-fire after PJAX swaps. The replacement depends on where the handler lives — see "Fix by location" below.
+  DOMContentLoaded does not re-fire after a swap. The replacement depends on where the handler lives — see "Fix by location" below.
   (none)
 
 ## H. Module-level state — hard, human review
@@ -35,7 +35,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   (none)
 
 ## K. Portal-to-body custom elements — add data-pusha-cleanup
-  Portal-to-body custom element. Survives PJAX swaps because connectedCallback moves it outside the swap container. Add `data-pusha-cleanup` to every render site so Pusha removes it before each nav.
+  Portal-to-body custom element. Survives a swap because connectedCallback moves it outside the swap container. Add `data-pusha-cleanup` to every render site so Pusha removes it before each nav.
   (none)
 
 ## L. Liquid persistent state — request-scoped Liquid in the layout shell
@@ -56,7 +56,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   (none)
 
 ## X. Theme app extensions — app blocks, embeds, and the Script Tag blind spot
-  Theme app extensions. Informational + advisory — an app's code cannot be mechanically transformed, so X inventories app surfaces and assigns each a PJAX-safety verdict routed by location. Two reports: X-surface lists every { "type": "@app" } declaration in a {% schema %}, split by container membership — a risk map that stays valid when the merchant installs something tomorrow, and it works with zero apps installed. X-placed recursively walks the blocks tree of every templates/*.json and sections/*.json plus config/settings_data.json -> current.blocks, and reports what is actually installed. Detection parses JSON and reads `type`: a text match misses the escaped `shopify:\/\/apps\/` encoding Shopify writes into some template files, and would report the flagship product template as app-free. Verdicts: at-risk (app block inside the swap container), survives (app block in a section group), survives-verify (app embed — outside the container, but references into the swapped region go stale with no repair signal), opaque (Script Tag API — invisible statically). App embeds with disabled: true are ignored.
+  Theme app extensions. Informational + advisory — an app's code cannot be mechanically transformed, so X inventories app surfaces and assigns each a swap-safety verdict routed by location. Two reports: X-surface lists every { "type": "@app" } declaration in a {% schema %}, split by container membership — a risk map that stays valid when the merchant installs something tomorrow, and it works with zero apps installed. X-placed recursively walks the blocks tree of every templates/*.json and sections/*.json plus config/settings_data.json -> current.blocks, and reports what is actually installed. Detection parses JSON and reads `type`: a text match misses the escaped `shopify:\/\/apps\/` encoding Shopify writes into some template files, and would report the flagship product template as app-free. Verdicts: at-risk (app block inside the swap container), survives (app block in a section group), survives-verify (app embed — outside the container, but references into the swapped region go stale with no repair signal), opaque (Script Tag API — invisible statically). App embeds with disabled: true are ignored.
   App wrapper: platform-generated fallback (no sections/apps.liquid or sections/_blocks.liquid)
   X-surface — where app blocks can land (@app schema declarations; valid with zero apps installed):
     sections/only-templates-key.liquid  [section]    at-risk if used — renders inside the swap container
@@ -66,7 +66,7 @@ whitelists: on (default — pass --no-whitelist to disable)
         sections/shell-group.json → section shell_sec (type: shell-section) → block widgetco_promo_shellkey  [shell — this placement survives]
         templates/index.json → section apps_array_sec (type: apps) → block 0
   Verdict → posture:
-    · section     → App block inside the swap container — its init JS ran on the old document and does not re-run. MEASURED 2026-09-11 against a purpose-built extension across 4 soft navigations (pusha-probe, run 0): exactly two shapes recover, and both do it with NO configuration and NO double-init. (1) An app block authored as a CUSTOM ELEMENT re-mounts for free via connectedCallback. (2) An app block that LISTENS FOR shopify:page:view — the Standard Storefront Events vocabulary at api/storefront-events-and-actions, which Pusha re-dispatches on every swap — rebinds the fresh node every time. Everything else went inert, and the loading shape made no difference: schema-attribute JS in <head>, an inline <script> in block markup, an in-markup <script src>, and a type=module script all failed identically. So re-executing the scripts in the swapped markup is NOT a general remedy — for the canonical case the JS is not in the markup at all, it is a <script async> the platform injects into <head>. If you own the app, the fix is to listen for shopify:page:view or author the block as a custom element; both are documented and supported. If you do NOT own the app, you cannot wrap code you did not write: opt the surrounding nav out with data-no-transition, or treat the page as PJAX-ineligible. Two experimental theme-side fallbacks exist for non-cooperating apps and both ship OFF — window.theme.config.appCompat.sectionEvents dispatches shopify:section:un/load (an undocumented use of theme-editor events), and appCompat.reexecuteExtensionScripts re-runs cdn.shopify.com/extensions/ bundles at the risk of double-binding. Measure before enabling either. NOTE: the theme editor cannot answer any of this — it performs a full page reload on every theme app extension change, so every app reads as recoverable there. Verify on the storefront across a real swap. What is NOT yet measured is how many installed third-party apps have adopted shopify:page:view; the mechanism is proven, the adoption rate is not.
+    · section     → App block inside the swap container — its init JS ran on the old document and does not re-run. MEASURED 2026-09-11 against a purpose-built extension across 4 soft navigations (pusha-probe, run 0): exactly two shapes recover, and both do it with NO configuration and NO double-init. (1) An app block authored as a CUSTOM ELEMENT re-mounts for free via connectedCallback. (2) An app block that LISTENS FOR shopify:page:view — the Standard Storefront Events vocabulary at api/storefront-events-and-actions, which Pusha re-dispatches on every swap — rebinds the fresh node every time. Everything else went inert, and the loading shape made no difference: schema-attribute JS in <head>, an inline <script> in block markup, an in-markup <script src>, and a type=module script all failed identically. So re-executing the scripts in the swapped markup is NOT a general remedy — for the canonical case the JS is not in the markup at all, it is a <script async> the platform injects into <head>. If you own the app, the fix is to listen for shopify:page:view or author the block as a custom element; both are documented and supported. If you do NOT own the app, you cannot wrap code you did not write: opt the surrounding nav out with data-no-transition, or treat the page as ineligible for instant navigation. Two experimental theme-side fallbacks exist for non-cooperating apps and both ship OFF — window.theme.config.appCompat.sectionEvents dispatches shopify:section:un/load (an undocumented use of theme-editor events), and appCompat.reexecuteExtensionScripts re-runs cdn.shopify.com/extensions/ bundles at the risk of double-binding. Measure before enabling either. NOTE: the theme editor cannot answer any of this — it performs a full page reload on every theme app extension change, so every app reads as recoverable there. Verify on the storefront across a real swap. What is NOT yet measured is how many installed third-party apps have adopted shopify:page:view; the mechanism is proven, the adoption rate is not.
   Blind spot — Script Tag API: apps can inject <script> at runtime. Those tags are not in any theme file,
   so this audit cannot see them and their absence above is not evidence of absence. They initialize once
   and go silent after page one. Verify in a live session.
@@ -119,13 +119,13 @@ whitelists: on (default — pass --no-whitelist to disable)
     block       — promote to a custom element (connected/disconnectedCallback); the browser re-mounts it.
     template    — a custom element, or an onAfterInit((c, meta) => …) hook keyed on meta.template.
     shell       — runs once and persists across navs; use onFirstLoad / setupGlobal, never sectionInits.
-    head-config — inert config (no call expressions); leave as-is, it is PJAX-safe.
+    head-config — inert config (no call expressions); leave as-is, it is safe across swaps.
 
   A and B need no action. C is safe but verify external refs are tracked.
   Re-run with --json for structured output a tool can consume directly.
 
 ## Skill freshness
-  CLI is @mimetic/pusha@0.1.0.
+  CLI is @mimeticthemes/pusha@0.1.0.
   No installed skill files found at standard paths (.claude/skills/pusha/, .cursor/rules/pusha.md, .aider-conventions.md).
   Run `pusha skill --claude` (or --cursor / --aider) to install one.
 

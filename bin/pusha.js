@@ -143,10 +143,6 @@ async function copyOrSkip(srcAbs, destAbs, { force, dryRun }) {
       return false;
     }
   }
-  if (dryRun) {
-    log.add(`${destAbs} (dry-run, not written)`);
-    return true;
-  }
   mkdirSync(dirname(destAbs), { recursive: true });
   copyFileSync(srcAbs, destAbs);
   log.add(destAbs);
@@ -322,7 +318,7 @@ async function applyLayoutEdits(cwd, { yes, dryRun }) {
   if (bodyMatch && /\btemplate-\{\{\s*template/.test(bodyMatch[0])) {
     warnings.push(
       `<body> uses class="template-{{ template.name }}" pattern.\n` +
-      `    Pusha syncs [data-template] on every PJAX nav but not body.className.\n` +
+      `    Pusha syncs [data-template] on every navigation but not body.className.\n` +
       `    Rewrite CSS selectors that target \`.template-X\` to \`[data-template="X"]\`,\n` +
       `    or accept that those class names freeze to the first-loaded page.`,
     );
@@ -1036,7 +1032,7 @@ function detectShellModals(themePath, shellFiles) {
               kind: 'body-class',
               cls,
               match: `document.body.classList.add('${cls}')`,
-              what: `body class "${cls}" added — survives PJAX nav, may lock scroll`,
+              what: `body class "${cls}" added — survives a swap, may lock scroll`,
             });
           }
         }
@@ -1397,15 +1393,15 @@ const REMEDIATION = {
     block: 'Promote to a custom element (connected/disconnectedCallback) — blocks have no per-block init registry.',
     template: 'Move to a custom element, or an onAfterInit((c,meta)=>…) hook keyed on meta.template.',
     shell: 'Global/shell scope — run once via onFirstLoad / setupGlobal. NOT sectionInits (it never re-fires here).',
-    'head-config': 'Leave as-is — inert config (no calls), runs once in the persistent shell, PJAX-safe.',
+    'head-config': 'Leave as-is — inert config (no calls), runs once in the persistent shell, safe across swaps.',
     include: 'Included snippet — verify render context; wrap as a custom element (or sectionInits if always inside a section).',
     asset: 'Global asset script — move init into onFirstLoad or a custom element.',
   },
   G: {
-    section: "Move the handler body into sectionInits['<handle>'](root). DOMContentLoaded won't re-fire on PJAX swaps.",
+    section: "Move the handler body into sectionInits['<handle>'](root). DOMContentLoaded does not re-fire after a swap.",
     block: "Move into the custom element's connectedCallback.",
     template: 'Move into a custom element or an onAfterInit hook.',
-    shell: 'Replace with onFirstLoad (runs once). DOMContentLoaded also never re-fires on PJAX navs.',
+    shell: 'Replace with onFirstLoad (runs once). DOMContentLoaded also never re-fires after a swap.',
     include: 'Verify render context; move into a custom element or the appropriate lifecycle hook.',
     asset: 'Global asset — replace DOMContentLoaded with onFirstLoad, or move into a custom element.',
   },
@@ -1421,7 +1417,7 @@ const REMEDIATION = {
 REMEDIATION.F = REMEDIATION.E; // F2 is a procedural {% javascript %} body — same routing as E.
 
 REMEDIATION.X = {
-  section: 'App block inside the swap container — its init JS ran on the old document and does not re-run. MEASURED 2026-09-11 against a purpose-built extension across 4 soft navigations (pusha-probe, run 0): exactly two shapes recover, and both do it with NO configuration and NO double-init. (1) An app block authored as a CUSTOM ELEMENT re-mounts for free via connectedCallback. (2) An app block that LISTENS FOR shopify:page:view — the Standard Storefront Events vocabulary at api/storefront-events-and-actions, which Pusha re-dispatches on every swap — rebinds the fresh node every time. Everything else went inert, and the loading shape made no difference: schema-attribute JS in <head>, an inline <script> in block markup, an in-markup <script src>, and a type=module script all failed identically. So re-executing the scripts in the swapped markup is NOT a general remedy — for the canonical case the JS is not in the markup at all, it is a <script async> the platform injects into <head>. If you own the app, the fix is to listen for shopify:page:view or author the block as a custom element; both are documented and supported. If you do NOT own the app, you cannot wrap code you did not write: opt the surrounding nav out with data-no-transition, or treat the page as PJAX-ineligible. Two experimental theme-side fallbacks exist for non-cooperating apps and both ship OFF — window.theme.config.appCompat.sectionEvents dispatches shopify:section:un/load (an undocumented use of theme-editor events), and appCompat.reexecuteExtensionScripts re-runs cdn.shopify.com/extensions/ bundles at the risk of double-binding. Measure before enabling either. NOTE: the theme editor cannot answer any of this — it performs a full page reload on every theme app extension change, so every app reads as recoverable there. Verify on the storefront across a real swap. What is NOT yet measured is how many installed third-party apps have adopted shopify:page:view; the mechanism is proven, the adoption rate is not.',
+  section: 'App block inside the swap container — its init JS ran on the old document and does not re-run. MEASURED 2026-09-11 against a purpose-built extension across 4 soft navigations (pusha-probe, run 0): exactly two shapes recover, and both do it with NO configuration and NO double-init. (1) An app block authored as a CUSTOM ELEMENT re-mounts for free via connectedCallback. (2) An app block that LISTENS FOR shopify:page:view — the Standard Storefront Events vocabulary at api/storefront-events-and-actions, which Pusha re-dispatches on every swap — rebinds the fresh node every time. Everything else went inert, and the loading shape made no difference: schema-attribute JS in <head>, an inline <script> in block markup, an in-markup <script src>, and a type=module script all failed identically. So re-executing the scripts in the swapped markup is NOT a general remedy — for the canonical case the JS is not in the markup at all, it is a <script async> the platform injects into <head>. If you own the app, the fix is to listen for shopify:page:view or author the block as a custom element; both are documented and supported. If you do NOT own the app, you cannot wrap code you did not write: opt the surrounding nav out with data-no-transition, or treat the page as ineligible for instant navigation. Two experimental theme-side fallbacks exist for non-cooperating apps and both ship OFF — window.theme.config.appCompat.sectionEvents dispatches shopify:section:un/load (an undocumented use of theme-editor events), and appCompat.reexecuteExtensionScripts re-runs cdn.shopify.com/extensions/ bundles at the risk of double-binding. Measure before enabling either. NOTE: the theme editor cannot answer any of this — it performs a full page reload on every theme app extension change, so every app reads as recoverable there. Verify on the storefront across a real swap. What is NOT yet measured is how many installed third-party apps have adopted shopify:page:view; the mechanism is proven, the adoption rate is not.',
   shell: 'App block in a section group — renders outside the swap container and is never removed, so its init runs once and keeps running. This is the recommended app placement. Verify only that it holds no references into the swapped region.',
   embed: 'App embed — injected before </head> / </body>, outside the swap container, so it survives. But an embed holding references INTO the swapped region goes stale silently, and no signal exists to repair it. Verify by hand on a swapped page.',
   script: 'Script Tag API — runtime-injected, not in theme files, invisible to a static audit. It initializes once and is silent after page one. Verify in a live session (or with Shopify API context, if present); a static report can only name this as a blind spot.',
@@ -1814,16 +1810,16 @@ const BUCKET_RULES = {
   B: 'Safe. JSON data blocks are non-executable.',
   C: 'Safe (verify). Custom elements with disconnectedCallback clean up automatically.',
   D: 'Needs cleanup. Add disconnectedCallback OR wrap the section so registry.destroy can fire.',
-  E: 'Procedural inline script that must re-run on each PJAX swap. The correct fix depends on where it lives — see "Fix by location" below.',
+  E: 'Procedural inline script that must re-run on each swap. The correct fix depends on where it lives — see "Fix by location" below.',
   F: 'F1 (custom element class) is already safe. F2 (procedural {% javascript %}) must re-run per swap — fix by location, see below.',
-  G: 'DOMContentLoaded does not re-fire after PJAX swaps. The replacement depends on where the handler lives — see "Fix by location" below.',
+  G: 'DOMContentLoaded does not re-fire after a swap. The replacement depends on where the handler lives — see "Fix by location" below.',
   H: 'Human review. Module-level state and IIFEs hold closures that don\'t replay on swap. Check reachability — dead code can be deleted; live code needs refactor.',
-  K: 'Portal-to-body custom element. Survives PJAX swaps because connectedCallback moves it outside the swap container. Add `data-pusha-cleanup` to every render site so Pusha removes it before each nav.',
+  K: 'Portal-to-body custom element. Survives a swap because connectedCallback moves it outside the swap container. Add `data-pusha-cleanup` to every render site so Pusha removes it before each nav.',
   L: 'Per-request Liquid in the layout shell (layout/theme.liquid, section groups, transitively-rendered snippets) freezes on first load. Sub-letters mirror the request-scoped taxonomy: A=URL/template, B=customer, C=cart, D=locale, E=per-page object, F=personalization, G=time, H=app-injected. Rank: auto=URL-derivable in JS, ask=user decides (full-reload boundary or section refetch), ok=already handled by Pusha or theme convention.',
   M: 'Persistent-shell stateful UI — modals/drawers/overlays that lived outside #MainContent and were authored assuming a full reload would dismiss them. Three remediation options: (1) add `data-pusha-close-on-nav` to the root (Pusha strips `[open]` / sets `aria-expanded="false"` / removes body classes listed in `data-pusha-body-class-on-open`); (2) implement a `closeOnNav()` method on the custom element; (3) call `Pusha.onBeforeLeave(() => this.close())` manually. Cart drawers and persistent widgets simply omit the marker — opt-in is the safe default.',
   J: 'Analytics surface. NOTE: Pusha reaches the pixel sandbox only through PREFIXED CUSTOM events — the customEvents bridge publishes pusha:page_viewed plus prefixed copies of the page-type payloads, and those are delivered to custom pixels and app pixels. What is fenced is publishing under STANDARD names, which the storefront API rejects, so a standard page_viewed never arrives on a swap. Delivery is not consumption: a third-party app pixel subscribed to the standard vocabulary has no mapping for a prefixed name, so reviving it still needs a companion custom pixel that forwards the event (docs/analytics-companion-pixel.md, README "Analytics & tracking"). This bucket checks the theme-serialized <script type="application/json" data-pusha-analytics-event> blocks anyway, because they are hand-written Liquid that nothing validates at runtime and keeping their shape right is what makes a supported publish path cheap to adopt later. Four kinds: coverage (a product/collection/search/cart page with no marker), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and would republish one page\'s payload forever), and raw-pixel (gtag/fbq/dataLayer calls installed directly in the theme — refire them manually from onAfterInit; do NOT migrate them into Customer Events, which would move a working pixel onto the unreachable channel).',
   P: 'Informational — {% partial %} + @shopify/partial-rendering regions (new-Liquid\'s islands substrate). The inventory maps each partial to its consumers. The partial name is a load-bearing string contract (renaming a declaration breaks every consumer), and Pusha must coordinate its container swap with the theme\'s partials.apply() so a nav mid-refresh has defined ordering.',
-  X: 'Theme app extensions. Informational + advisory — an app\'s code cannot be mechanically transformed, so X inventories app surfaces and assigns each a PJAX-safety verdict routed by location. Two reports: X-surface lists every { "type": "@app" } declaration in a {% schema %}, split by container membership — a risk map that stays valid when the merchant installs something tomorrow, and it works with zero apps installed. X-placed recursively walks the blocks tree of every templates/*.json and sections/*.json plus config/settings_data.json -> current.blocks, and reports what is actually installed. Detection parses JSON and reads `type`: a text match misses the escaped `shopify:\\/\\/apps\\/` encoding Shopify writes into some template files, and would report the flagship product template as app-free. Verdicts: at-risk (app block inside the swap container), survives (app block in a section group), survives-verify (app embed — outside the container, but references into the swapped region go stale with no repair signal), opaque (Script Tag API — invisible statically). App embeds with disabled: true are ignored.',
+  X: 'Theme app extensions. Informational + advisory — an app\'s code cannot be mechanically transformed, so X inventories app surfaces and assigns each a swap-safety verdict routed by location. Two reports: X-surface lists every { "type": "@app" } declaration in a {% schema %}, split by container membership — a risk map that stays valid when the merchant installs something tomorrow, and it works with zero apps installed. X-placed recursively walks the blocks tree of every templates/*.json and sections/*.json plus config/settings_data.json -> current.blocks, and reports what is actually installed. Detection parses JSON and reads `type`: a text match misses the escaped `shopify:\\/\\/apps\\/` encoding Shopify writes into some template files, and would report the flagship product template as app-free. Verdicts: at-risk (app block inside the swap container), survives (app block in a section group), survives-verify (app embed — outside the container, but references into the swapped region go stale with no repair signal), opaque (Script Tag API — invisible statically). App embeds with disabled: true are ignored.',
 };
 
 function printAuditText(themePath, { findings, summary, suppressed, analyticsMarkers, appSurfaces, skillFreshness, whitelistsActive }) {
@@ -2167,12 +2163,12 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
   out += `    block       — promote to a custom element (connected/disconnectedCallback); the browser re-mounts it.${NL}`;
   out += `    template    — a custom element, or an onAfterInit((c, meta) => …) hook keyed on meta.template.${NL}`;
   out += `    shell       — runs once and persists across navs; use onFirstLoad / setupGlobal, never sectionInits.${NL}`;
-  out += `    head-config — inert config (no call expressions); leave as-is, it is PJAX-safe.${NL}${NL}`;
+  out += `    head-config — inert config (no call expressions); leave as-is, it is safe across swaps.${NL}${NL}`;
   out += `  A and B need no action. C is safe but verify external refs are tracked.${NL}`;
   out += `  Re-run with --json for structured output a tool can consume directly.${NL}${NL}`;
 
   out += `## Skill freshness${NL}`;
-  out += `  CLI is @mimetic/pusha@${PACKAGE_VERSION}.${NL}`;
+  out += `  CLI is @mimeticthemes/pusha@${PACKAGE_VERSION}.${NL}`;
   if (!skillFreshness || skillFreshness.length === 0) {
     out += `  No installed skill files found at standard paths (.claude/skills/pusha/, .cursor/rules/pusha.md, .aider-conventions.md).${NL}`;
     out += `  Run \`pusha skill --claude\` (or --cursor / --aider) to install one.${NL}${NL}`;

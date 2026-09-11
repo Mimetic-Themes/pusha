@@ -121,4 +121,4 @@ Until then, add `data-no-transition` to every link that goes to the cart.
 - Cart drawer fix — https://support.zapiet.com/en/articles/10301708-slide-cart-drawer-by-amp
 - Selection restore — https://support.zapiet.com/en/articles/12577087-restoring-widget-selection
 
-Full research trail: `~/Work/pusha-probe/pusha-probe/results.md`.
+Full research trail: `pusha-probe/results.md`.

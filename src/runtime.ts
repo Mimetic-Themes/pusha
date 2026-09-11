@@ -696,7 +696,7 @@ export function initRuntime(config?: PushaConfig): void {
   if (resolved.pjax === false) return;
 
   if (!getContainer()) {
-    console.warn(`[pusha] container "${resolved.containerSelector}" not found. PJAX disabled.`);
+    console.warn(`[pusha] container "${resolved.containerSelector}" not found. Instant navigation is off.`);
     return;
   }
 

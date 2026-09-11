@@ -76,7 +76,7 @@ export function checkContainer(container: HTMLElement, meta: NavMeta): void {
   if (unmarked.length) {
     console.warn(
       '[pusha/dev] sections without [data-section-type] or custom-element shape — ' +
-        "they won't initialize on PJAX swap:",
+        "they will not initialize after a swap:",
       unmarked,
       'on',
       meta.url,

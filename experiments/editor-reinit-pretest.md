@@ -6,7 +6,7 @@ blocks and app embeds alike. A reload re-runs everything, so every app reads as
 `recovers` and the measurement carries no information. The inference below is sound;
 the editor simply cannot be used to test it.
 
-Replaced by `~/Work/pusha-probe` — a purpose-built theme app extension whose blocks
+Replaced by `pusha-probe` — a purpose-built theme app extension whose blocks
 differ by exactly one variable each, measured under real Pusha navigation instead of
 in the editor. That rig also reaches the two residuals called out below as
 unmeasurable here: `Shopify.designMode`-gated listeners, and app embeds.
@@ -86,8 +86,8 @@ settings, template switch) drops the listeners. Re-paste after any of those.
 below is generated rather than remembered:
 
 ```bash
-shopify theme pull --store <store> --theme <id> --path ~/Work/<theme>
-node ~/Work/pusha/bin/pusha.js audit ~/Work/<theme> --json \
+shopify theme pull --store <store> --theme <id> --path <theme-path>
+pusha audit <theme-path> --json \
   | jq -r '.findings.X[] | select(.kind=="app-block")
            | "\(.appHandle)\t\(.blockHandle)\t\(.verdict)\t\(.placements[0].address)"'
 ```
@@ -193,7 +193,7 @@ This is the corpus check the fixtures can't do
 (`bucket-x-brief.md` → "Definition of done" #2).
 
 ```bash
-node ~/Work/pusha/bin/pusha.js audit ~/Work/<theme>
+pusha audit <theme-path>
 ```
 
 **Must produce zero findings** — admin-side, no storefront runtime. A hit here
