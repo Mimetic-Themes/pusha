@@ -14,7 +14,8 @@ You need Node 22.13 or later and a theme folder with `layout/theme.liquid`.
 
 ```sh
 cd path/to/your/theme
-npx github:mimetic-themes/pusha init      # add --dry-run to preview
+npx github:mimetic-themes/pusha init            # add --dry-run to preview
+npx github:mimetic-themes/pusha skill --claude  # or --cursor, --aider
 npx github:mimetic-themes/pusha audit
 ```
 
@@ -24,15 +25,34 @@ npx github:mimetic-themes/pusha audit
 - adds `snippets/pusha.liquid` — config, the default fade, the script tag
 - edits `layout/theme.liquid` — `{% render 'pusha' %}` in `<head>`, plus data attributes on `<body>` and on your main container
 
-`audit` finds the scripts that run once per page load. After a swap they do not run again. For each one it prints the fix.
+`skill` installs the porting instructions your coding agent reads. **Do this before you start porting.** It writes two files:
 
-Push the theme and click around. To watch what Pusha does, set `debug: true` in `snippets/pusha.liquid` and open the console.
+- `SKILL.md` — the procedure: audit, transform, verify, re-audit
+- `PATTERNS.md` — the transformation rules, one per finding type, with worked examples
+
+`audit` finds the scripts that run once per page load. After a swap they do not run again. For each one it prints the fix.
 
 **Using a bundler?** `npm install github:mimetic-themes/pusha`, then `import { initRuntime } from '@mimeticthemes/pusha'; initRuntime();`. See [Path B](#path-b--bundler) for the markup you add by hand.
 
 **Before you put this on a merchant store, read [Before you ship this](#before-you-ship-this).** A swap is not a page load. Three things do not survive one on their own, and none of them throws an error when it breaks.
 
-### What you get
+## Porting a theme
+
+Most themes need more than `init`. Any script that runs once per document has to be told to run again after a swap, and on a Dawn-shaped theme that is dozens of small, mechanical edits.
+
+That work is meant for an agent, not for you. Install the skill, then tell your agent:
+
+> Port this theme to Pusha. Run `pusha audit`, work the findings, and show me each change.
+
+The audit is deterministic and emits `--json`, so the agent gets a work queue rather than prose to interpret. `PATTERNS.md` carries the rule for each finding type, so the edits come out consistent instead of improvised. Your job is to watch, steer the judgment calls the agent surfaces, and read the diff — which is why every change lands as a reviewable commit and nothing is rewritten in place without you seeing it.
+
+Re-run `pusha audit` when the agent is done. Findings should have moved into the safe buckets.
+
+## Checking it works
+
+Push the theme and click around. To watch what Pusha does, set `debug: true` in `snippets/pusha.liquid` and open the console.
+
+## What you get
 
 - 11 kB gzipped (UMD), zero runtime dependencies
 - Built for OS 2.0 — JSON templates, sections, **theme blocks** (`blocks/`), and the theme editor
