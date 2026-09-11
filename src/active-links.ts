@@ -1,4 +1,4 @@
-// @mimetic/pusha/active-links — drop-in helper for bucket L-A findings.
+// @mimeticthemes/pusha/active-links — drop-in helper for bucket L-A findings.
 //
 // Server-rendered Liquid like `link.current`, `link.child_active`, and body
 // `class="template-{{ template.name }}"` freezes on first load in the
@@ -8,7 +8,7 @@
 // and body classes stay in sync with the current template.
 //
 // Usage:
-//   import { initActiveLinks } from '@mimetic/pusha/active-links';
+//   import { initActiveLinks } from '@mimeticthemes/pusha/active-links';
 //   initActiveLinks();
 //
 // Themes opt into the active-link toggle by marking nav containers:

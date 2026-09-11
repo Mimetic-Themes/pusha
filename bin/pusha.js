@@ -2176,7 +2176,7 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
   out += `  PATTERNS.md — full transformation patterns, edge cases, decision trees${NL}`;
   out += `  SKILL.md    — end-to-end porter procedure (audit → delegate → diff → review)${NL}${NL}`;
   out += `  After \`npm install github:mimetic-themes/pusha\`:${NL}`;
-  out += `    node_modules/@mimetic/pusha/skill/{SKILL.md, PATTERNS.md}${NL}${NL}`;
+  out += `    node_modules/@mimeticthemes/pusha/skill/{SKILL.md, PATTERNS.md}${NL}${NL}`;
   out += `  Or via this CLI:${NL}`;
   out += `    pusha audit --full                  (append PATTERNS.md to this report)${NL}`;
   out += `    pusha skill --print                 (dump both to stdout)${NL}`;
@@ -2283,7 +2283,7 @@ function getSkillFreshness(themePath) {
 
 function readSkillFileOrWarn(path, label) {
   if (!existsSync(path)) {
-    return `<!-- ${label} not found at ${path}. The skill files weren't shipped with this install — try a newer @mimetic/pusha, or read them on GitHub: https://github.com/mimetic-themes/pusha/tree/main/skill -->\n`;
+    return `<!-- ${label} not found at ${path}. The skill files weren't shipped with this install — try a newer @mimeticthemes/pusha, or read them on GitHub: https://github.com/mimetic-themes/pusha/tree/main/skill -->\n`;
   }
   return readFileSync(path, 'utf8');
 }
@@ -2479,7 +2479,7 @@ switch (cmd) {
     break;
   case '--version':
   case '-V':
-    console.log(`@mimetic/pusha ${PACKAGE_VERSION}`);
+    console.log(`@mimeticthemes/pusha ${PACKAGE_VERSION}`);
     break;
   case undefined:
   case '--help':

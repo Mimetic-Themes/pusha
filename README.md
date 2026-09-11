@@ -71,7 +71,7 @@ Stores that already carry a dozen apps have enough fragile integration points. A
 
 > **Not published yet.** Pusha is installed from this repository, not from a
 > registry. The commands below fetch and build it from git. Its package name is
-> `@mimetic/pusha` either way, so nothing in your theme changes when it does get
+> `@mimeticthemes/pusha` either way, so nothing in your theme changes when it does get
 > published.
 
 Two paths. Pick the one that matches how your theme is built.
@@ -97,12 +97,12 @@ For themes with Vite or another bundler:
 npm install github:mimetic-themes/pusha
 ```
 
-> Not published to npm yet. `@mimetic/pusha` does not resolve on the public registry — install from the git URL above, or clone and `npm link`. The `npx @mimetic/pusha init` command in Path A has the same caveat.
+> Not published to npm yet. `@mimeticthemes/pusha` does not resolve on the public registry — install from the git URL above, or clone and `npm link`. The `npx @mimeticthemes/pusha init` command in Path A has the same caveat.
 
 Then in your entry file:
 
 ```ts
-import { initRuntime } from '@mimetic/pusha';
+import { initRuntime } from '@mimeticthemes/pusha';
 
 initRuntime();
 ```
@@ -459,7 +459,7 @@ import {
   registry,
   onBeforeNav, onBeforeLeave, onAfterSwap, onAfterInit, onFirstLoad, onNavError,
   registerTransition,
-} from '@mimetic/pusha';
+} from '@mimeticthemes/pusha';
 ```
 
 ### Component registry
@@ -467,7 +467,7 @@ import {
 Components are init'd on the initial page load AND after every swap.
 
 ```ts
-import { registry } from '@mimetic/pusha/registry';
+import { registry } from '@mimeticthemes/pusha/registry';
 
 registry.register('product-form', {
   setupGlobal() {
@@ -508,7 +508,7 @@ For cleanup, optionally register `window.theme.sectionDestroy[handle]`.
 ### Lifecycle hooks
 
 ```ts
-import { onAfterInit, onBeforeNav, onNavError } from '@mimetic/pusha/hooks';
+import { onAfterInit, onBeforeNav, onNavError } from '@mimeticthemes/pusha/hooks';
 
 onBeforeNav((url, event) => {
   // Return false to cancel the navigation.
@@ -539,7 +539,7 @@ All hooks return an unregister function and may be async — returning a Promise
 ### Programmatic navigation
 
 ```ts
-import { go } from '@mimetic/pusha';
+import { go } from '@mimeticthemes/pusha';
 
 await go('/products/foo');                            // simplest case
 await go('/products/foo', { transition: 'slide' });   // request a named transition
@@ -592,7 +592,7 @@ The runtime skips both class-add phases and the wait — page swaps instantly, n
 Register a transition with `leave` / `enter` functions returning Promises. They run instead of the CSS class path when their `from` / `to` matchers fit the navigation:
 
 ```ts
-import { registerTransition } from '@mimetic/pusha/transitions';
+import { registerTransition } from '@mimeticthemes/pusha/transitions';
 
 registerTransition({
   name: 'slide',
@@ -850,14 +850,14 @@ feature set with `@barba/prefetch` + `@barba/css` + `@barba/router` runs ~12.5 k
 ## Package exports
 
 ```
-@mimetic/pusha              → main entry. initRuntime, go, registry, hooks, transitions
-@mimetic/pusha/registry     → ComponentRegistry + the singleton instance
-@mimetic/pusha/hooks        → onBeforeNav, onBeforeLeave, onAfterSwap, onAfterInit, onFirstLoad, onNavError
-@mimetic/pusha/transitions  → registerTransition, transition primitives
-@mimetic/pusha/prefetch     → prefetchPage, warmupNavLinks, invalidateCache, installPrefetch
-@mimetic/pusha/islands      → revalidateIslands (Section Rendering API)
-@mimetic/pusha/active-links → initActiveLinks (current/ancestor nav link classes)
-@mimetic/pusha/diagnostics  → dev-mode warnings (gated at runtime by `debug: true`)
+@mimeticthemes/pusha              → main entry. initRuntime, go, registry, hooks, transitions
+@mimeticthemes/pusha/registry     → ComponentRegistry + the singleton instance
+@mimeticthemes/pusha/hooks        → onBeforeNav, onBeforeLeave, onAfterSwap, onAfterInit, onFirstLoad, onNavError
+@mimeticthemes/pusha/transitions  → registerTransition, transition primitives
+@mimeticthemes/pusha/prefetch     → prefetchPage, warmupNavLinks, invalidateCache, installPrefetch
+@mimeticthemes/pusha/islands      → revalidateIslands (Section Rendering API)
+@mimeticthemes/pusha/active-links → initActiveLinks (current/ancestor nav link classes)
+@mimeticthemes/pusha/diagnostics  → dev-mode warnings (gated at runtime by `debug: true`)
 ```
 
 `active-links` is run automatically by the UMD build, so Path A themes get it
@@ -942,13 +942,13 @@ Source layout under `src/`:
 - Pre-ported Dawn and Horizon starter forks
 - v1.0 once at least one production theme has run on Pusha for ~2 weeks without contract issues
 
-### Future packaging — the `@mimetic/pusha-*` bundle
+### Future packaging — the `@mimeticthemes/pusha-*` bundle
 
-This package (the core runtime) is planned to gain two siblings in the same `@mimetic` scope:
+This package (the core runtime) is planned to gain two siblings in the same `@mimeticthemes` scope:
 
-- **`@mimetic/pusha`** — this runtime (registry, hooks, transitions, prefetch, islands). The core.
-- **`@mimetic/pusha-experiments`** — section-level A/B testing as a theme block.
-- **`@mimetic/pusha-agent-ready`** — **agent-readability of the rendered page.** An audit mode of the existing `pusha audit` engine (a new bucket: "can an agent parse this page" — semantic HTML, structured markup, stable `data-section-type` roots) plus the markup patterns that fix it. Pairs with the component registry's existing markup contract.
+- **`@mimeticthemes/pusha`** — this runtime (registry, hooks, transitions, prefetch, islands). The core.
+- **`@mimeticthemes/pusha-experiments`** — section-level A/B testing as a theme block.
+- **`@mimeticthemes/pusha-agent-ready`** — **agent-readability of the rendered page.** An audit mode of the existing `pusha audit` engine (a new bucket: "can an agent parse this page" — semantic HTML, structured markup, stable `data-section-type` roots) plus the markup patterns that fix it. Pairs with the component registry's existing markup contract.
 
   **Scope note:** this is *not* `llms.txt` / UCP / JSON-LD discovery-file injection — Shopify ships those natively on every store now, so that lane is commoditized. The non-commoditized value is the *rendered page itself* being agent-parseable, which the native discovery files don't address.
 

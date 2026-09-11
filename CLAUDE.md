@@ -16,7 +16,7 @@ Pusha is the PJAX framework product for Mimetic Themes — the runtime layer tha
 
 **New-Liquid developer preview** — `.liquid` templates with inline `{% block %}`, `{% partial %}` / `content_for`, and native web components (the reference theme formerly at `../base-theme-next`; **not on disk as of 2026-09-11** — restore or re-clone it before relying on new-Liquid claims here) — is currently a **compatibility test bed, not a first-class porting target**. The audit runs and its coverage is correct there, but the `sectionInits` transform model is largely moot (components self-mount via custom-element lifecycle), and several runtime seams are still open: the analytics channel (`@shopify/standard-events` vs `Shopify.analytics`), the islands substrate (Section Rendering API vs `@shopify/partial-rendering`), container-attribute conventions (`#main-content` + `data-template` on `<main>`), and interaction between Pusha's container swap and the platform's own `partials.apply()`. The strategic question — whether new-Liquid needs Pusha at all vs. native cross-document View Transitions + speculation rules — is being resolved by a native-vs-Pusha experiment on the reference theme, not assumed. See the 2026-07-22 new-Liquid review before treating new-Liquid as supported.
 
-Planned sibling packages in the `@mimetic` scope (`@mimetic/pusha-experiments`, `@mimetic/pusha-agent-ready`) are described in the README Roadmap → "Future packaging". They are separate packages, not part of this runtime.
+Planned sibling packages in the `@mimeticthemes` scope (`@mimeticthemes/pusha-experiments`, `@mimeticthemes/pusha-agent-ready`) are described in the README Roadmap → "Future packaging". They are separate packages, not part of this runtime.
 
 ## Reference implementations
 
@@ -75,7 +75,7 @@ The renaming work is mechanical when the time comes (sweep README/docs/marketing
 
 ### CLI — three commands, modeled after Astro's `create` pattern
 
-The CLI exists for **discovery, one-command install, and scaffolding**, not for the porting workflow (which is the skill + Shopify CLI). Three commands. Two are invoked via `npx @mimetic/pusha <cmd>` (no global install); the third uses the `npm create` convention.
+The CLI exists for **discovery, one-command install, and scaffolding**, not for the porting workflow (which is the skill + Shopify CLI). Three commands. Two are invoked via `npx @mimeticthemes/pusha <cmd>` (no global install); the third uses the `npm create` convention.
 
 #### `npm create pusha@latest` — interactive scaffolder (Astro-style)
 
@@ -97,16 +97,16 @@ Non-interactive flags for CI / scripted use:
 
 This is the command that converts a curious reader into a user. It's also where opinionated features get bundled — choosing "anime.js + transitions + Tailwind" wires the right imports, snippets, and config in one shot. Cribbed directly from Astro's `--template` + `--add` model.
 
-#### `npx @mimetic/pusha audit`
+#### `npx @mimeticthemes/pusha audit`
 
 Runs the audit against the current directory (or path argument). Buckets A–H (per-script) plus the surface buckets: J (analytics), K (portal-to-body custom elements), L (per-request Liquid in the shell), M (persistent-shell stateful UI), P (partials). `--json` emits structured output for tools/agents. The CLI is the canonical audit implementation — there is no longer a parallel bash script.
 
-#### `npx @mimetic/pusha init`
+#### `npx @mimeticthemes/pusha init`
 
 Detects Path A vs Path B (presence of `package.json` + `vite`), then:
 
 - Path A: copies `pusha.min.js` into `assets/`, copies `pusha.liquid` into `snippets/`, optionally inserts `{% render 'pusha' %}` into `layout/theme.liquid` `<head>` if not already present.
-- Path B: runs `npm install @mimetic/pusha --save`, prints the import snippet for the entry point.
+- Path B: runs `npm install @mimeticthemes/pusha --save`, prints the import snippet for the entry point.
 - Both: confirms before writing; respects an existing install; supports a `--dry-run` flag.
 
 Subset of `create --adapt`'s functionality — kept as a separate command for the case where the user already has a theme and just wants Pusha installed, without any of the scaffolder's other prompts.
@@ -117,7 +117,7 @@ Subset of `create --adapt`'s functionality — kept as a separate command for th
 - `pusha build` — Vite handles builds in Path B; nothing to build in Path A.
 
 #### Implementation notes
-- CLI binary lives at `bin/pusha.js` in the `@mimetic/pusha` package. `npm create pusha` resolves to a separate `create-pusha` package that delegates into the same scaffolder logic (standard npm-create convention).
+- CLI binary lives at `bin/pusha.js` in the `@mimeticthemes/pusha` package. `npm create pusha` resolves to a separate `create-pusha` package that delegates into the same scaffolder logic (standard npm-create convention).
 - Audit lives only in the CLI now. The previous bash script (`skill/scripts/audit.sh`) was removed in favor of the Node implementation — bash couldn't cleanly express the analysis-heavy buckets (K's class-hierarchy resolution being the breaking point), and maintaining two implementations was a tax with no DX upside. Skill docs and SKILL.md route at `pusha audit`.
 - Starter templates live in a separate repo (`mimetic-themes/pusha-starters` or similar), cloned at scaffold time. Keeps the main package small and lets starters evolve independently.
 
@@ -125,7 +125,7 @@ Subset of `create --adapt`'s functionality — kept as a separate command for th
 
 The skill auto-detects which path a theme is set up for and suggests the matching install method:
 
-- Theme directory has `package.json` with `vite` in deps/devDeps → suggest Path B (`npm install @mimetic/pusha`)
+- Theme directory has `package.json` with `vite` in deps/devDeps → suggest Path B (`npm install @mimeticthemes/pusha`)
 - No `package.json` or no Vite → suggest Path A (download `pusha.min.js` to `assets/`, copy snippet)
 - Both paths remain explicitly available; auto-detection is a recommendation, not a forced choice. The dev can override.
 
@@ -144,7 +144,7 @@ The runtime exposes four things to consumers: a config object, lifecycle hooks, 
 
 #### Hooks — lifecycle extension points
 
-Imported from `@mimetic/pusha/hooks`, or available on the global `Pusha` object. Each returns an unregister function.
+Imported from `@mimeticthemes/pusha/hooks`, or available on the global `Pusha` object. Each returns an unregister function.
 
 ```js
 onBeforeNav((url, event) => { /* link click intercepted, before any work */ });
@@ -194,7 +194,7 @@ Pusha's events are **in addition to** Shopify's `shopify:*` theme editor events 
 Programmatic PJAX navigation. Cribbed from `barba.go(url)`.
 
 ```js
-import { go } from '@mimetic/pusha';
+import { go } from '@mimeticthemes/pusha';
 // or via the global: window.Pusha.go('/cart');
 
 await go('/cart');                              // simplest case
@@ -209,7 +209,7 @@ Returns a Promise that resolves after `onAfterInit`. Useful for form-submit redi
 Register transition behaviors by name with optional `from`/`to` matchers. Replaces the URL-pattern-based `getTransitionType()` from the reference port with a more flexible declarative model (Barba pattern).
 
 ```js
-import { registerTransition } from '@mimetic/pusha/transitions';
+import { registerTransition } from '@mimeticthemes/pusha/transitions';
 
 registerTransition({
   name: 'fade',
@@ -237,7 +237,7 @@ Cart operations (add, update, remove, fetch) belong in the theme, not the framew
 Where cart code lives:
 - **Existing themes**: their own cart code, audited and transformed by the skill like any other code.
 - **New themes**: the `npm create pusha` starter templates may include a reference cart implementation. Starters are opinionated; the framework is not.
-- **If a Mimetic-authored cart helper library ever ships**, it's a separate package (`@mimetic/cart`), not a subpath of Pusha.
+- **If a Mimetic-authored cart helper library ever ships**, it's a separate package (`@mimeticthemes/cart`), not a subpath of Pusha.
 
 ### Head sync — required, automatic
 
@@ -269,7 +269,7 @@ The Shopify Section Rendering API lets you fetch any section's HTML in isolation
 
 **Visual contract**: while an island is revalidating, it gets a `.is-revalidating` class that themes can style for a subtle dim/skeleton. The class is removed when the new HTML is in place.
 
-**Exported as `@mimetic/pusha/islands` subpath** for explicit imports. Auto-imported by main entry when prefetch is enabled.
+**Exported as `@mimeticthemes/pusha/islands` subpath** for explicit imports. Auto-imported by main entry when prefetch is enabled.
 
 ### Theme editor integration
 
@@ -437,7 +437,7 @@ function firePageView() {
 
 The theme registers a `pjax:content-swap` listener / `onAfterInit` hook to refire them manually:
   ```js
-  import { onAfterInit } from '@mimetic/pusha/hooks';
+  import { onAfterInit } from '@mimeticthemes/pusha/hooks';
   onAfterInit(() => {
     window.gtag?.('event', 'page_view', { page_location: location.href });
     window.dataLayer?.push({ event: 'virtualPageView' });
@@ -477,14 +477,14 @@ This is **not** the `shopify:section:*` situation. Those are theme *editor* even
 ### Package exports
 
 ```
-@mimetic/pusha              → main entry. initRuntime, go, registry, default re-exports
-@mimetic/pusha/registry     → component registry (register, setupGlobal/init/destroy primitives)
-@mimetic/pusha/hooks        → onBeforeNav, onBeforeLeave, onAfterSwap, onAfterInit, onFirstLoad
-@mimetic/pusha/transitions  → registerTransition, transition primitives
-@mimetic/pusha/prefetch     → prefetch cache, nav-link warmup, critical image warming
-@mimetic/pusha/islands      → Section Rendering API revalidation for stale-prone regions
-@mimetic/pusha/active-links → active-link marking across swaps
-@mimetic/pusha/diagnostics  → dev-mode warnings (gated at runtime by `debug`, not stripped)
+@mimeticthemes/pusha              → main entry. initRuntime, go, registry, default re-exports
+@mimeticthemes/pusha/registry     → component registry (register, setupGlobal/init/destroy primitives)
+@mimeticthemes/pusha/hooks        → onBeforeNav, onBeforeLeave, onAfterSwap, onAfterInit, onFirstLoad
+@mimeticthemes/pusha/transitions  → registerTransition, transition primitives
+@mimeticthemes/pusha/prefetch     → prefetch cache, nav-link warmup, critical image warming
+@mimeticthemes/pusha/islands      → Section Rendering API revalidation for stale-prone regions
+@mimeticthemes/pusha/active-links → active-link marking across swaps
+@mimeticthemes/pusha/diagnostics  → dev-mode warnings (gated at runtime by `debug`, not stripped)
 ```
 
 Eight subpaths. Each maps to its own source file, and `package.json` `exports`
@@ -513,7 +513,7 @@ product sells against.
 If the probe forces it into a real subsystem — SRAPI re-fetch, per-app allowlists,
 vendor shims — it becomes dead weight for every theme with no apps inside the
 container, and Bucket X already names which themes those are. That is the moment
-it earns `@mimetic/pusha/app-compat` as a genuinely opt-in subpath, and the moment
+it earns `@mimeticthemes/pusha/app-compat` as a genuinely opt-in subpath, and the moment
 build-time modularity is worth its cost. Not before.
 
 ### Versioning
@@ -521,7 +521,7 @@ build-time modularity is worth its cost. Not before.
 - **`0.1.0`** ships first. Breaking changes allowed in 0.x minors. Themes pinning a major version are explicitly opting into churn until 1.0.
 - **`1.0.0`** when at least one external consumer (Dawn-ported site) has run live for ~2 weeks with no contract issues. Don't ship 1.0 just to ship 1.0 — wait for production validation.
 - **Post-1.0**: major bumps for breaking changes to `window.theme.*`, hook names, event names, or `sectionInits` shape. Minor for additions. Patch for bug fixes.
-- **Migration guide** required for any 1.x → 2.x change. A `npx @mimetic/pusha migrate <from> <to>` tool is *not* a v1 requirement — manual migration docs are enough until breaking changes become frequent.
+- **Migration guide** required for any 1.x → 2.x change. A `npx @mimeticthemes/pusha migrate <from> <to>` tool is *not* a v1 requirement — manual migration docs are enough until breaking changes become frequent.
 
 ### Maintenance tradeoff
 
@@ -532,9 +532,9 @@ Pre-ported Dawn/Horizon forks need a "re-apply skill against upstream main" work
 The Pusha runtime ships as a single npm package with two consumer entry points:
 
 - **A — Drop-in vendor file**: pre-bundled UMD (`dist/pusha.min.js`) consumers drop into `theme/assets/`. Aimed at theme devs working without a build pipeline. Registers `window.theme.*` globally.
-- **B — NPM + build-integrated**: ESM entry (`import { registry } from '@mimetic/pusha'`) for themes with Vite/TS pipelines. Same source, different output.
+- **B — NPM + build-integrated**: ESM entry (`import { registry } from '@mimeticthemes/pusha'`) for themes with Vite/TS pipelines. Same source, different output.
 
-The `pusha` skill ships *as part of Pusha's distribution* — it's not a separate product or a marketplace listing. The skill files (`SKILL.md`, `PATTERNS.md`) land at `node_modules/@mimetic/pusha/skill/` after `npm install`, and the `pusha audit` output points at them at every invocation. To wire them into a specific agent's discovery path:
+The `pusha` skill ships *as part of Pusha's distribution* — it's not a separate product or a marketplace listing. The skill files (`SKILL.md`, `PATTERNS.md`) land at `node_modules/@mimeticthemes/pusha/skill/` after `npm install`, and the `pusha audit` output points at them at every invocation. To wire them into a specific agent's discovery path:
 
 ```fish
 pusha skill --print                # dump to stdout for manual paste

@@ -43,7 +43,7 @@ the runtime seams the review flagged, so treat any breakage as data, not failure
 - **Analytics**: the bridge fires `Shopify.analytics` + `publish('page_viewed')`;
   this theme's convention is `@shopify/standard-events`. Watch for under- or
   double-counting (this is Move 4).
-- **Islands**: `@mimetic/pusha/islands` targets the Section Rendering API
+- **Islands**: `@mimeticthemes/pusha/islands` targets the Section Rendering API
   (`?sections=`), which this theme doesn't use — expect islands to no-op.
 - **Dual swap**: cart mutations go through `s-cart` + `partials.apply()`; a Pusha
   nav mid-refresh has no defined ordering. Try navigating right after an

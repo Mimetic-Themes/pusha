@@ -57,7 +57,7 @@ The user will either pass a path or one is obvious from context. Confirm the pat
 
 Before auditing, check whether the Pusha runtime is installed in this theme:
 
-- **Path B detection** — `package.json` exists and `@mimetic/pusha` is in `dependencies`
+- **Path B detection** — `package.json` exists and `@mimeticthemes/pusha` is in `dependencies`
 - **Path A detection** — `assets/pusha.min.js` exists AND `snippets/pusha.liquid` exists
 
 If Pusha is already installed, skip to Step 2.
@@ -65,12 +65,12 @@ If Pusha is already installed, skip to Step 2.
 If not installed, detect which path the theme is set up for and propose the matching install:
 
 Pusha is not on a registry yet — every install comes from the git repository.
-The package name is still `@mimetic/pusha`, so imports are unaffected.
+The package name is still `@mimeticthemes/pusha`, so imports are unaffected.
 
 - `package.json` exists with `vite` in deps/devDeps → suggest Path B:
   ```bash
   npm install github:mimetic-themes/pusha
-  # Add `import { initRuntime } from '@mimetic/pusha'; initRuntime();` to your entry point
+  # Add `import { initRuntime } from '@mimeticthemes/pusha'; initRuntime();` to your entry point
   ```
 - Otherwise → suggest Path A:
   ```bash
@@ -201,7 +201,7 @@ Wrapped scripts should classify into the same "safe" buckets as their already-wr
 
 ## Runtime contract reference
 
-`PATTERNS.md` "Runtime lifecycle" inlines the call graph an agent needs to reason about wrapped scripts. The runtime source itself ships in `node_modules/@mimetic/pusha/dist/pusha.esm.js` (and `pusha.min.js` for Path A) — typed via `dist/index.d.ts` if your agent has TypeScript access. When in doubt about behaviour, the source is the contract.
+`PATTERNS.md` "Runtime lifecycle" inlines the call graph an agent needs to reason about wrapped scripts. The runtime source itself ships in `node_modules/@mimeticthemes/pusha/dist/pusha.esm.js` (and `pusha.min.js` for Path A) — typed via `dist/index.d.ts` if your agent has TypeScript access. When in doubt about behaviour, the source is the contract.
 
 ## Optional: enriched audit with Shopify API context
 

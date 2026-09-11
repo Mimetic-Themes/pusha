@@ -41,7 +41,7 @@ document.dispatchEvent(new CustomEvent('zapiet:start'));
 Add this to your theme JavaScript:
 
 ```js
-import { onAfterInit } from '@mimetic/pusha/hooks';
+import { onAfterInit } from '@mimeticthemes/pusha/hooks';
 
 onAfterInit((container) => {
   // Zapiet mounts into this div. If it is not on the page, do nothing.

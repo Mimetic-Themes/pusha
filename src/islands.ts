@@ -5,7 +5,7 @@
 // hot-swaps the section markup in place.
 //
 // The registry dependency is injected so the islands subpath stays standalone —
-// users importing only `@mimetic/pusha/islands` aren't forced to pull in the
+// users importing only `@mimeticthemes/pusha/islands` aren't forced to pull in the
 // whole runtime tree.
 
 import { log as dlog } from './diagnostics.js';
