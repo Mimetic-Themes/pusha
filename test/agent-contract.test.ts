@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, writeFileSync, mkdtempSync, cpSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, cpSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -215,4 +215,73 @@ test('--no-whitelist surfaces everything the whitelists hid', () => {
   const count = (j: any) => Object.values<any[]>(j.findings).flat().length;
   assert.ok(count(raw) > count(clean), 'raw run shows more');
   assert.equal(raw.suppressed.E.length + raw.suppressed.F.length, 0, 'nothing suppressed when off');
+});
+
+// ─── shell scope ────────────────────────────────────────────────────────────
+// Which files persist across a swap decides which fix applies, so getting it
+// wrong routes a shell script into sectionInits — a registry that is never
+// walked outside the container, so the script simply never runs.
+
+function scratchTheme(files: Record<string, string>): string {
+  const root = join(mkdtempSync(join(tmpdir(), 'pusha-shell-')), 'theme');
+  for (const [rel, body] of Object.entries(files)) {
+    const abs = join(root, rel);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, body);
+  }
+  return root;
+}
+
+const CONTAINER = '<main id="MainContent" data-page-container data-page-type="{{ template }}">';
+
+test('a section rendered from the layout is shell, not section scope', () => {
+  // `{% section %}` was never followed, so a theme using the bare form had its
+  // header classified as `section` and the audit told an agent to wrap it.
+  const theme = scratchTheme({
+    'layout/theme.liquid': `<body>{% section 'header' %}\n${CONTAINER}{{ content_for_layout }}</main></body>`,
+    'sections/header.liquid': `<header>{% render 'menu' %}</header>`,
+    'snippets/menu.liquid': `<nav></nav>\n<script>document.querySelector('nav').hidden = true;</script>`,
+    'sections/hero.liquid': `<div data-section-type="hero"></div>\n<script>init();</script>`,
+  });
+  const j = audit(theme);
+  const at = (f: string) => Object.values<any[]>(j.findings).flat().find((x) => x.file === f);
+  assert.equal(at('snippets/menu.liquid')?.location, 'shell', 'reached through a layout-rendered section');
+  assert.equal(at('sections/hero.liquid')?.location, 'section', 'an ordinary section is still section scope');
+});
+
+test('a snippet rendered inside the container is not shell', () => {
+  // Themes place snippets inside deliberately — an identity block has to arrive
+  // with the swapped content to describe the page navigated to.
+  const theme = scratchTheme({
+    'layout/theme.liquid':
+      `<body>{% render 'header-bar' %}\n${CONTAINER}{% render 'per-page' %}{{ content_for_layout }}</main></body>`,
+    'snippets/header-bar.liquid': `<div></div>\n<script>shell();</script>`,
+    'snippets/per-page.liquid': `<div></div>\n<script>perPage();</script>`,
+  });
+  const j = audit(theme);
+  const at = (f: string) => Object.values<any[]>(j.findings).flat().find((x) => x.file === f);
+  assert.equal(at('snippets/header-bar.liquid')?.location, 'shell', 'outside the container');
+  assert.notEqual(at('snippets/per-page.liquid')?.location, 'shell', 'inside the container is swapped');
+});
+
+test('every layout is a shell, not just theme.liquid', () => {
+  const theme = scratchTheme({
+    'layout/theme.liquid': `<body>${CONTAINER}{{ content_for_layout }}</main></body>`,
+    'layout/password.liquid': `<body>{% render 'password-footer' %}${CONTAINER}{{ content_for_layout }}</main></body>`,
+    'snippets/password-footer.liquid': `<footer></footer>\n<script>pw();</script>`,
+  });
+  const j = audit(theme);
+  const found = Object.values<any[]>(j.findings).flat().find((x) => x.file === 'snippets/password-footer.liquid');
+  assert.equal(found?.location, 'shell', 'password.liquid has a persistent shell too');
+});
+
+test('a section group rendered inside the container is not shell', () => {
+  const theme = scratchTheme({
+    'layout/theme.liquid': `<body>${CONTAINER}{% sections 'main-group' %}{{ content_for_layout }}</main></body>`,
+    'sections/main-group.json': JSON.stringify({ sections: { m: { type: 'promo' } }, order: ['m'] }),
+    'sections/promo.liquid': `<div data-section-type="promo"></div>\n<script>promo();</script>`,
+  });
+  const j = audit(theme);
+  const found = Object.values<any[]>(j.findings).flat().find((x) => x.file === 'sections/promo.liquid');
+  assert.notEqual(found?.location, 'shell', 'a group inside the container is swapped like any page content');
 });
