@@ -41,6 +41,46 @@ split is right the outcome still holds — a once-per-document snippet fires onc
 companion pixel. Measure on a store with Klaviyo installed before saying it
 out loud.
 
+### 3b. The Horizon rig still calls the framework "Moss"
+
+16 mentions across 6 files in `~/Work/pusha-horizon`, left from the rename.
+Most are `MOSS-PORT:` audit-trail comments, which are harmless but misleading
+to anyone reading the rig as an example.
+
+One is **live code, and broken**:
+
+```js
+// assets/recently-viewed-init.js:18
+if (window.Moss && typeof window.Moss.onAfterSwap === 'function') {
+  window.Moss.onAfterSwap(recordCurrentProduct);
+}
+```
+
+`window.Moss` does not exist — the global is `window.Pusha`. The guard is
+permanently false, so recently-viewed tracking has been dead across every
+navigation since the rename, failing in exactly the silent way the audit warns
+about. Fix the call, then sweep the comments.
+
+Files: `recently-viewed-init.js` (live bug), `theme-editor.js`,
+`view-transitions.js`, `utilities.js`, `qr-code-generator.js`,
+`auto-close-details.js`, `sections/header.liquid`.
+
+**Worth asking:** should `pusha audit` flag a guard on a global that is not
+`window.Pusha`? A dead feature-detect on a renamed global is undetectable by
+every existing bucket, and any theme ported before the rename has the same
+latent bug.
+
+### 3c. Unidentified a11y console message mentioning Moss
+
+Reported from a live walk; not reproduced. Nothing in the rig writes "Moss" to
+the console, `assets/focus.js` is clean, and no `moss.*` file remains — so the
+source is unknown. Capture the exact console line and its stack before chasing
+it.
+
+Possibly related and separately confirmed: `Autofocus processing was blocked
+because a document already has a focused element` on Horizon's collection page
+(see item 6).
+
 ---
 
 ## Publishing
