@@ -6,7 +6,13 @@ import type { PushaConfig } from './types.js';
 const DEFAULTS: Required<
   Pick<
     PushaConfig,
-    'pjax' | 'debug' | 'analytics' | 'transitions' | 'containerSelector' | 'standardCartEvents'
+    | 'pjax'
+    | 'debug'
+    | 'analytics'
+    | 'transitions'
+    | 'containerSelector'
+    | 'standardCartEvents'
+    | 'timeout'
   >
 > = {
   pjax: true,
@@ -15,6 +21,7 @@ const DEFAULTS: Required<
   transitions: true,
   containerSelector: '#MainContent',
   standardCartEvents: true,
+  timeout: 10_000,
 };
 
 let resolved: PushaConfig = { ...DEFAULTS };

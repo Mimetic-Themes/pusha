@@ -101,6 +101,15 @@ export interface PushaConfig {
   analytics?: boolean | AnalyticsConfig;
   /** PJAX swap target. Defaults to '#MainContent'. */
   containerSelector?: string;
+
+  /**
+   * Milliseconds to wait for a navigation's HTML before giving up and handing
+   * the URL to the browser. Guards against a request that never settles — a
+   * hung origin, a captive portal, a proxy that holds the socket open. Without
+   * it the page sits faded at opacity 0 with no way out. Set 0 to disable.
+   * Default 10000.
+   */
+  timeout?: number;
   /** Selector for elements whose first link is warmed as they near the viewport
    *  (collection cards, article tiles). Off unless set — OS 2.0 themes share no
    *  card convention, so there's no safe default. ⚠ Budget it: a long collection
@@ -124,7 +133,7 @@ export interface PushaConfig {
    *  See src/cart.ts. */
   standardCartEvents?: boolean;
   /** EXPERIMENTAL, all flags default OFF. Candidate repairs for theme app
-   *  extension code that goes inert after a swap. Measured by ~/Work/pusha-probe
+   *  extension code that goes inert after a swap. Measured by pusha-probe
    *  before any of them ships on by default. See src/app-compat.ts. */
   appCompat?: AppCompatConfig;
 }

@@ -64,14 +64,36 @@ export function updateBodyTemplateAttribute(doc: Document): void {
 // portable-wallets) by stripping their type="module" — the browser then
 // parsed module syntax as a classic script and threw "Cannot use import
 // statement outside a module".
+// A script that neither loads nor errors — a CDN black-holing the request, a
+// captive portal — would otherwise leave this promise pending forever, and the
+// swap waits on it with the container already faded to opacity 0. Resolve
+// anyway after the cap: the page continues without that script, which is what
+// happens on a normal page load when a third-party asset is slow.
+const SCRIPT_LOAD_TIMEOUT = 5_000;
+
 function loadScript(source: HTMLScriptElement): Promise<void> {
   return new Promise<void>((resolve) => {
     const el = document.createElement('script');
     for (const attr of Array.from(source.attributes)) {
       el.setAttribute(attr.name, attr.value);
     }
-    el.onload = () => resolve();
-    el.onerror = () => resolve();
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      if (!settled) console.warn(`[pusha] script timed out after ${SCRIPT_LOAD_TIMEOUT}ms: ${el.getAttribute('src')}`);
+      done();
+    }, SCRIPT_LOAD_TIMEOUT);
+    // No-op in a browser, where setTimeout returns a number. Under Node (tests,
+    // SSR harnesses) it returns a Timeout that would otherwise hold the event
+    // loop open for the full cap after the document is gone.
+    (timer as unknown as { unref?: () => void }).unref?.();
+    el.onload = done;
+    el.onerror = done;
     document.head.appendChild(el);
   });
 }

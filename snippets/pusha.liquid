@@ -46,6 +46,7 @@
     transitions: true,
     debug: false,
     containerSelector: '#MainContent',
+    timeout: 10000,  /* ms before a stalled navigation falls back to a normal browser load */
     prefetchConfig: {
       page:       { soft:  60000, hard: 300000 },
       article:    { soft:  60000, hard: 300000 },
@@ -82,9 +83,36 @@
      prevents competing transition layers on back/forward and edge cases. */
   @view-transition { navigation: none; }
 
+  /* Slow-navigation feedback. The runtime holds .is-navigating on <html> for the
+     whole fetch. The 400ms delay means a fast swap never flashes a bar — only a
+     navigation the buyer would otherwise think had failed grows one. currentColor
+     so it reads correctly on light and dark themes without configuration. */
+  html.is-navigating::after {
+    content: '';
+    position: fixed;
+    inset-block-start: 0;
+    inset-inline: 0;
+    block-size: 3px;
+    background: currentColor;
+    opacity: 0;
+    transform-origin: 0 50%;
+    animation: pusha-progress 8s 400ms cubic-bezier(0.1, 0.8, 0.2, 1) forwards;
+    z-index: 2147483647;
+    pointer-events: none;
+  }
+
+  @keyframes pusha-progress {
+    0%   { opacity: 0;    transform: scaleX(0); }
+    1%   { opacity: 0.6;  transform: scaleX(0); }
+    100% { opacity: 0.6;  transform: scaleX(1); }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     [data-page-container] {
       transition: none;
+    }
+    html.is-navigating::after {
+      animation: none;
     }
   }
 </style>
