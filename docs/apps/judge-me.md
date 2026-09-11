@@ -96,6 +96,47 @@ onAfterInit(async (container) => {
 3. Look at the review widget again. The reviews must be there.
 4. Open the network panel. Confirm one request to `api.judge.me` for each navigation.
 
+## Is there a re-init call? No — searched, 2026-09-11
+
+Zapiet publishes one (`Zapiet.start()`), so we looked hard for a Judge.me
+equivalent across Shopify Community, Stack Overflow, Reddit, GitHub, page-builder
+integration docs (Replo, PageFly, GemPages, Shogun, Boost Commerce) and agency
+blogs. **Nothing exists for the full review widget**, in official docs or
+community knowledge.
+
+**One call does exist, and it does not help us.** Judge.me documents
+`judgeme.badge()` then `judgeme.customizeBadges()` — note the namespace is
+`judgeme.*`, not `jdgm.*` — for **badges only**, on collection pages whose theme
+injects more product cards by AJAX:
+
+> Setup Preview Badge for products rendered by JavaScript (AJAX) —
+> `help.judge.me/knowledge_base/topics/setup-preview-badge-for-products-rendered-by-javascript-ajax`
+
+Two reasons it is not our fix. It targets the Preview Badge, not the review
+widget. And under Pusha the badge does not need it: a container swap re-renders
+the badge's Liquid server-side, so it comes back correct on its own. That call is
+for markup injected *without* a Liquid render — infinite scroll appending cards —
+which is a different problem.
+
+**Judge.me's own headless SDK has the same trouble.** Their
+`@judgeme/shopify-hydrogen` package ships a `JudgemeProviderWrapper` that
+"automatically re-renders widgets after they are loaded", and notes widgets "may
+flash" on Hydrogen 2. Their own tooling works around non-full-page-load rendering
+rather than exposing a clean re-mount.
+
+**`data-auto-install='false'` stays unexplained.** Multiple sources confirm the
+attribute is in their markup. **None — official or community — says what it
+does.** Nobody has published a reverse-engineered manual-install call. Do not
+build on the hypothesis that one is reachable.
+
+**A caveat on the search itself.** GitHub code search needed sign-in, and
+grep.app and Sourcegraph both rate-limited. Public code-search coverage for
+literal `jdgm.` call sites in real theme repos was **not achieved**. Read the
+GitHub findings as "not found with available tools", not as confirmed absence.
+
+**So the API re-fetch above remains the only route** for the review widget. It is
+shape 4, not shape 5.
+
 ## Limits
 
 Read these before you promise the merchant full parity.
