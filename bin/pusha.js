@@ -35,6 +35,7 @@ Usage:
 init options:
   --dry-run             Print actions without writing
   --force               Overwrite existing files without prompting
+  --skip-detect         Install even if the directory doesn't look like a theme
   --yes, -y             Accept the layout edit prompt
 
 audit options:
@@ -439,7 +440,11 @@ async function applyLayoutEdits(cwd, { yes, dryRun }) {
 async function runInit(args) {
   const flags = {
     dryRun: args.includes('--dry-run'),
+    // `--force` used to mean both "overwrite my customised snippet" and "run
+    // here even though this doesn't look like a theme". A dev passing it for
+    // the second reason silently lost the first.
     force: args.includes('--force'),
+    skipDetect: args.includes('--skip-detect') || args.includes('--force'),
     yes: args.includes('--yes') || args.includes('-y'),
   };
 
@@ -448,8 +453,8 @@ async function runInit(args) {
   if (!detectShopifyTheme(cwd)) {
     log.err(`${cwd} doesn't look like a Shopify theme.`);
     log.warn(`expected one of: layout/theme.liquid, sections/, config/settings_schema.json`);
-    log.warn(`re-run with --force from a theme root`);
-    if (!flags.force) process.exit(1);
+    log.warn(`re-run with --skip-detect if this really is a theme root`);
+    if (!flags.skipDetect) process.exit(1);
   }
 
   if (flags.dryRun) {

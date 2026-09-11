@@ -894,7 +894,7 @@ Pusha disables instant nav inside the theme editor (`window.Shopify.designMode =
 |---|---|
 | `shopify:section:load` | Re-runs `registry.initAll(target)` + `sectionInits` for the loaded section. |
 | `shopify:section:unload` | Calls `registry.destroyAll(target)` and `sectionDestroy[handle]` if present. |
-| `shopify:section:select` | Re-runs `registry.initAll(target)`. |
+| `shopify:section:select` | Not handled. Selecting a section in the sidebar re-renders nothing, so re-initializing would only risk a second bind. Register your own listener in `setupGlobal` if you want scroll-into-view or a focus ring. |
 
 Sections written to be re-init-safe under page swaps work for the theme editor automatically.
 

@@ -624,6 +624,89 @@ test('cleanup does not run when the navigation is about to fall back', async () 
   assert.equal(destroyed, 0, 'nothing was torn down');
 });
 
+test('islands revalidate on a #hash URL', async () => {
+  // Regression: the section query was appended to a URL that still carried its
+  // fragment, so `?sections=` landed INSIDE the hash. The server returned HTML,
+  // res.json() threw, and the catch swallowed it — islands silently never
+  // revalidated on any hash URL.
+  const requested: string[] = [];
+  const islandHtml = '<div data-island data-section-id="price"><span id="p">£20</span></div>';
+
+  (globalThis as Record<string, unknown>).fetch = async (input: string | URL) => {
+    const url = String(input);
+    requested.push(url);
+    if (url.includes('sections=')) {
+      return new Response(JSON.stringify({ price: islandHtml }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(
+      makePageHtml('product', '<div data-island data-section-id="price"><span id="p">£10</span></div>'),
+      { status: 200, headers: { 'Content-Type': 'text/html' } },
+    );
+  };
+
+  document.body.insertAdjacentHTML('beforeend', '<a id="hashed" href="/products/foo#reviews">Foo</a>');
+  runtime.initRuntime({ prefetchConfig: { product: { soft: 1, hard: 60_000 } } });
+
+  // Warm the cache so the nav is a cached one — islands only revalidate then.
+  const prefetch = await import('../src/prefetch.ts');
+  await prefetch.prefetchPage('/products/foo');
+  document.getElementById('hashed')!.click();
+  await new Promise((r) => setTimeout(r, 80));
+
+  const sectionsCall = requested.find((u) => u.includes('sections='));
+  assert.ok(sectionsCall, `a ?sections= request was made — got ${JSON.stringify(requested)}`);
+  const parsed = new URL(sectionsCall!, 'https://shop.test');
+  assert.equal(parsed.searchParams.get('sections'), 'price', 'the param is a real query param');
+  assert.equal(parsed.hash, '', 'the fragment is dropped, not carried into the query');
+  assert.equal(parsed.pathname, '/products/foo');
+});
+
+test('stylesheets in section bodies are synced, and only once', async () => {
+  // Shopify's stylesheet_tag emits the link inside the section body, so a
+  // head-only scan missed every section stylesheet and the first visit to each
+  // template rendered unstyled.
+  fetchResponder = () => ({
+    status: 200,
+    body: makePageHtml(
+      'product',
+      '<link rel="stylesheet" href="/section-price.css"><h1>Product</h1>',
+    ),
+  });
+
+  runtime.initRuntime();
+  await runtime.go('/products/bar');
+  const links = () =>
+    Array.from(document.head.querySelectorAll('link[rel="stylesheet"]'))
+      .filter((l) => l.getAttribute('href') === '/section-price.css');
+  assert.equal(links().length, 1, 'the section stylesheet reached <head>');
+
+  // Returning to the same template must not append it again — the link lives in
+  // the swapped container, so it is destroyed while its rules stay applied.
+  await runtime.go('/products/baz');
+  assert.equal(links().length, 1, 'not re-appended on a return visit');
+});
+
+test('a stylesheet href containing a quote does not abort the navigation', async () => {
+  // Unescaped in a selector this throws SyntaxError, which drops the page to a
+  // full browser load with no explanation.
+  fetchResponder = () => ({
+    status: 200,
+    body: makePageHtml('product', `<link rel="stylesheet" href='/a"b.css'><h1>Product</h1>`),
+  });
+  let navError: unknown = null;
+  hooks.onNavError((error) => {
+    navError = error;
+  });
+
+  runtime.initRuntime();
+  await runtime.go('/products/bar');
+  assert.equal(navError, null, 'no error — the swap completed');
+  assert.equal(window.location.pathname, '/products/bar');
+});
+
 test('a navigation that never resolves falls back to a full browser load', async () => {
   // Without a cap the container sits faded at opacity 0 forever: the fetch never
   // settles, so neither the swap nor the error path ever runs.

@@ -696,10 +696,13 @@ export function initRuntime(config?: PushaConfig): void {
       destroySectionsIn(target);
       registry.destroyAll(target);
     });
-    document.addEventListener('shopify:section:select', (event) => {
-      const target = event.target as HTMLElement;
-      registry.initAll(target, new Set(resolved.disabledComponents ?? []));
-    });
+    // `shopify:section:select` fires when the merchant clicks a section in the
+    // editor sidebar. It does NOT re-render anything — the DOM is untouched — so
+    // re-running init there was, at best, a no-op and at worst a second bind on
+    // every click for any component whose init is not perfectly idempotent.
+    // `shopify:section:load` already covers the case where markup actually
+    // changes. Themes that want select-specific behaviour (scroll into view,
+    // focus ring) register their own listener in setupGlobal.
     return;
   }
 

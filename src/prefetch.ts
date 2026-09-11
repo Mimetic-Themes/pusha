@@ -196,6 +196,11 @@ export function prefetchPage(url: string, { force = false } = {}): Promise<void>
         }
       }
       const html = await response.text();
+      // Delete before set. Map keeps an overwritten key in its ORIGINAL
+      // insertion position, so a stale-while-revalidate refresh left the entry
+      // first in line for eviction — the pages a buyer returns to most were
+      // evicted soonest, which is backwards.
+      cache.delete(cacheKey);
       cache.set(cacheKey, { html, cachedAt: Date.now() });
       trimCache();
       dlog('prefetch', `cached ${cacheKey} (${html.length} bytes)`);
@@ -309,6 +314,15 @@ export function observeViewportPrefetch(root: ParentNode = document): void {
   if (typeof IntersectionObserver === 'undefined') {
     root.querySelectorAll(selector).forEach(warmElementLink);
     return;
+  }
+
+  // The old container's cards are gone but still observed, and
+  // IntersectionObserver holds its targets strongly — so every navigation
+  // pinned another page's worth of detached nodes for the session. Drop them
+  // before observing the new container's.
+  if (viewportObserver) {
+    viewportObserver.disconnect();
+    document.querySelectorAll(selector).forEach((el) => viewportObserver?.observe(el));
   }
 
   viewportObserver ??= new IntersectionObserver(
