@@ -41,15 +41,23 @@
 //                 keep alive across swaps; GA4 routed through Customer Events
 //                 needs the companion pixel. Off by default.
 //   3. dataLayer— window.dataLayer.push({ event, … }) for GTM. Off by default.
-//   4. standardEvents — @shopify/standard-events PageViewEvent, re-dispatched on
-//                 swap for new-Liquid themes (their page-view-event.js fires only
-//                 on DOMContentLoaded, so the generic pageview is dropped on PJAX
-//                 navs). 'auto' by default: no-ops unless the theme ships
-//                 @shopify/standard-events (resolved via the theme's importmap).
+//   4. standardEvents — shopify:page:view, re-dispatched on every swap. NOT an
+//                 analytics bridge, despite living in this file: Shopify documents
+//                 the Standard Storefront Events vocabulary as a channel apps use
+//                 to REACT ON THE PAGE, and says to use web pixels for analytics
+//                 because these fire regardless of consent
+//                 (api/storefront-events-and-actions/events/listen). It is an app
+//                 COMPATIBILITY bridge — the sanctioned way an app learns a soft
+//                 navigation happened. The docs put the theme in charge of what
+//                 fires ("the theme decides which ones exist"), which is what
+//                 licenses dispatching per navigation instead of per document.
+//                 'auto' by default: no-ops unless @shopify/standard-events
+//                 resolves via the theme's importmap. ⚠ The non-module path the
+//                 dispatch guide documents (window.StandardEvents) is NOT checked
+//                 here, so a Dawn-derived theme following it silently no-ops.
 //                 Page-type events self-heal via <s-view-event> — not re-fired here.
-//                 MEASURED not to reach the web pixel sandbox; it is a
-//                 documented-surface call, so it stays as the forward-compatible
-//                 channel, but don't claim it as a pixel fix.
+//                 Measured not to reach the web pixel sandbox; that separation is
+//                 BY DESIGN, not a defect, and was never a candidate pixel fix.
 //   5. customEvents — prefixed custom events. The only publish path that clears
 //                 the fence above and reaches pixels. On by default.
 //   6. trekkie  — ShopifyAnalytics.lib.page(), the pipe behind admin Analytics.
@@ -300,23 +308,45 @@ function publishCustom(prefix: string, name: string, data: unknown): void {
   }
 }
 
-// ─── Standard Events bridge (new-Liquid) ────────────────────────────────────
-// @shopify/standard-events is resolved through the THEME's importmap at runtime.
+// ─── Standard storefront events bridge ──────────────────────────────────────
+// The dispatch guide documents TWO ways a theme loads the library, and Pusha has
+// to try both or it silently no-ops on half of them
+// (api/storefront-events-and-actions/events/dispatch#loading-the-library):
+//
+//   1. Module themes map the bare specifier in an importmap.
+//   2. Non-module themes ("some Dawn-derived themes") assign the namespace to
+//      window.StandardEvents from a module script.
+//
 // The specifier lives in a variable + /* @vite-ignore */ so the bundler leaves it
-// as a runtime import (Pusha doesn't depend on the package). Cached after the
-// first attempt: the module on success, null on failure (classic theme — no
-// importmap entry).
+// as a runtime import — Pusha does not depend on the package.
+//
+// Only a SUCCESSFUL resolution is cached. Path 2 assigns the global from an async
+// module script, so the global can be absent on an early swap and present on a
+// later one; caching a miss would pin the first answer forever.
 const STANDARD_EVENTS_SPECIFIER = '@shopify/standard-events';
-let standardEventsModule: { PageViewEvent?: new (detail: unknown) => Event } | null | undefined;
+type StandardEventsModule = { PageViewEvent?: new (detail: unknown) => Event };
+let standardEventsModule: StandardEventsModule | null = null;
 
-async function loadStandardEvents(): Promise<typeof standardEventsModule> {
-  if (standardEventsModule !== undefined) return standardEventsModule;
+function hasPageViewEvent(mod: unknown): mod is StandardEventsModule {
+  return typeof (mod as StandardEventsModule | undefined)?.PageViewEvent === 'function';
+}
+
+async function loadStandardEvents(): Promise<StandardEventsModule | null> {
+  if (standardEventsModule) return standardEventsModule;
   try {
-    standardEventsModule = await import(/* @vite-ignore */ STANDARD_EVENTS_SPECIFIER);
+    const mod = await import(/* @vite-ignore */ STANDARD_EVENTS_SPECIFIER);
+    if (hasPageViewEvent(mod)) {
+      standardEventsModule = mod;
+      return standardEventsModule;
+    }
   } catch {
-    standardEventsModule = null;
+    // No importmap entry for the specifier — fall through to the global.
   }
-  return standardEventsModule;
+  if (hasPageViewEvent(window.StandardEvents)) {
+    standardEventsModule = window.StandardEvents;
+    return standardEventsModule;
+  }
+  return null;
 }
 
 function containerTemplate(meta?: NavMeta): string {
@@ -391,4 +421,13 @@ function fireDataLayer(cfg: boolean | string | Record<string, unknown>): void {
   } catch (err) {
     console.warn('[pusha/analytics] dataLayer.push threw', err);
   }
+}
+
+/** Test-only: clear the cached standard-events module.
+ *
+ *  The cache is intentionally sticky in production — only a successful resolution
+ *  is stored, so the non-module path can land on a later swap. In tests that
+ *  stickiness would leak one test's fake module into every test after it. */
+export function _resetAnalyticsForTests(): void {
+  standardEventsModule = null;
 }
