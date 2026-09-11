@@ -123,6 +123,21 @@ export interface PushaConfig {
    *  `event.detail.source === 'shopify-standard-events'`, or set this to false.
    *  See src/cart.ts. */
   standardCartEvents?: boolean;
+  /** EXPERIMENTAL, all flags default OFF. Candidate repairs for theme app
+   *  extension code that goes inert after a swap. Measured by ~/Work/pusha-probe
+   *  before any of them ships on by default. See src/app-compat.ts. */
+  appCompat?: AppCompatConfig;
+}
+
+/** Experimental theme-app-extension repair flags. Each is off unless set. */
+export interface AppCompatConfig {
+  /** Dispatch `shopify:section:unload` before the swap and
+   *  `shopify:section:load` after it, on every `#shopify-section-*` element.
+   *  One flag governs both: load without unload leaks a listener set per nav. */
+  sectionEvents?: boolean;
+  /** Re-execute scripts served from `cdn.shopify.com/extensions/`, bypassing
+   *  head-sync's dedupe for those URLs only. ⚠ Expect double-binding. */
+  reexecuteExtensionScripts?: boolean;
 }
 
 export interface NavMeta {
@@ -170,6 +185,11 @@ declare global {
       locale?: string;
       formatMoney?: (cents: number, format: string) => string;
     };
+    /** @shopify/standard-events, when the theme loads it via the non-module path
+     *  documented in the dispatch guide (`window.StandardEvents = SE`) instead of
+     *  mapping the bare specifier in an importmap. Module themes resolve through
+     *  the importmap and never populate this. */
+    StandardEvents?: { PageViewEvent?: new (detail: unknown) => Event };
     /** Trekkie — Shopify's own storefront analytics client, the pipe behind the
      *  admin's Analytics reports. Undocumented and outside the Liquid
      *  compatibility guarantee, so treat every member as possibly absent. */

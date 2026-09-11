@@ -17,6 +17,7 @@ const hooks = await import('../src/hooks.ts');
 const registryModule = await import('../src/registry.ts');
 const activeLinksModule = await import('../src/active-links.ts');
 const prefetchModuleTop = await import('../src/prefetch.ts');
+const analyticsModule = await import('../src/analytics.ts');
 
 let fixture: DomFixture;
 
@@ -74,6 +75,7 @@ beforeEach(() => {
   registryModule.registry._resetForTests();
   activeLinksModule._resetActiveLinksForTests();
   prefetchModuleTop._resetPrefetchForTests();
+  analyticsModule._resetAnalyticsForTests();
 });
 
 afterEach(() => {
@@ -1137,20 +1139,23 @@ test('checkContainer ignores section wrappers that contain a custom-element desc
 });
 
 // ─── standardEvents bridge ──────────────────────────────────────────────────
-// Coverage note: these tests pin the FAIL-SAFE half of the bridge only — that a
-// theme without @shopify/standard-events (every classic OS 2.0 theme, and this
-// Node environment) degrades silently and never breaks navigation.
+// Coverage note: the bridge resolves the library two ways, and only one of them
+// is reachable from here.
 //
-// The positive path — that a resolvable module gets a PageViewEvent dispatched
-// on every swap — is NOT covered here, because the specifier is resolved through
-// the *theme's* importmap at runtime and there is no honest way to fake that in
-// jsdom without either shipping a fake @shopify package into node_modules or
-// making the specifier injectable in production code. It is verified by hand
-// instead: see experiments/native-vs-pusha/standard-events-probe.md, Stage A.
+// The GLOBAL path (window.StandardEvents, for themes without an importmap) is
+// covered positively below — a fake namespace on the global is exactly the shape
+// a non-module theme installs, so the dispatch, the payload, and the malformed-
+// global no-op are all observed rather than inferred.
 //
-// Until that probe runs, "the bridge dispatches correctly" is an inference from
-// reading the code, not an observed fact. Don't let these green tests suggest
-// otherwise.
+// The IMPORTMAP path is not. The bare specifier resolves through the *theme's*
+// importmap at runtime, and there is no honest way to fake that in jsdom without
+// shipping a fake @shopify package into node_modules or making the specifier
+// injectable in production code. It stays verified by hand:
+// experiments/native-vs-pusha/standard-events-probe.md, Stage A.
+//
+// The two paths share everything after resolution — same dispatch, same payload
+// — so the global tests do exercise that code. What they cannot prove is that a
+// real importmap resolves.
 
 test('standardEvents: a missing @shopify/standard-events module never breaks navigation', async () => {
   // Node cannot resolve the specifier, so the dynamic import rejects — the same
@@ -1181,6 +1186,80 @@ test('standardEvents: a missing @shopify/standard-events module never breaks nav
     warns.filter((w) => w.includes('standard-events') || w.includes('PageViewEvent')).length,
     0,
     'a missing standard-events module is a silent no-op, not a warning',
+  );
+});
+
+test('standardEvents: falls back to window.StandardEvents when the importmap has no entry', async () => {
+  // The non-module path from the dispatch guide: a theme without an importmap
+  // entry assigns the namespace to a global instead. Node cannot resolve the bare
+  // specifier here, so the dynamic import rejects and the global is the only way
+  // the bridge can resolve — which is exactly the production shape this covers.
+  const seen: Array<{ template: unknown; url: unknown }> = [];
+  class FakePageViewEvent extends Event {
+    page: { template?: unknown; url?: unknown };
+    constructor(detail: { page: { template?: unknown; url?: unknown } }) {
+      super('shopify:page:view', { bubbles: true });
+      this.page = detail.page;
+    }
+  }
+  (window as unknown as { StandardEvents: unknown }).StandardEvents = {
+    PageViewEvent: FakePageViewEvent,
+  };
+  const onPageView = (e: Event) => {
+    const page = (e as FakePageViewEvent).page;
+    seen.push({ template: page.template, url: page.url });
+  };
+  document.addEventListener('shopify:page:view', onPageView);
+
+  (window as unknown as { theme: { config: Record<string, unknown> } }).theme = {
+    config: { analytics: { shopify: true, standardEvents: true } },
+  };
+
+  try {
+    runtime.initRuntime();
+    document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+    await new Promise((r) => setTimeout(r, 100));
+  } finally {
+    document.removeEventListener('shopify:page:view', onPageView);
+    delete (window as unknown as { StandardEvents?: unknown }).StandardEvents;
+  }
+
+  assert.equal(seen.length, 1, 'one shopify:page:view per swap, via the global fallback');
+  // The payload is the documented StandardEventPage shape, and `template` comes
+  // from the swapped container rather than the page we navigated away from.
+  assert.equal(seen[0].template, 'product');
+  assert.match(String(seen[0].url), /\/products\/foo$/);
+});
+
+test('standardEvents: a global without PageViewEvent is ignored, not called', async () => {
+  // A theme could assign something else to the global, or assign it before the
+  // module finishes loading. Duck-typing on PageViewEvent is what keeps that from
+  // throwing mid-navigation.
+  (window as unknown as { StandardEvents: unknown }).StandardEvents = { notTheRightShape: true };
+  (window as unknown as { theme: { config: Record<string, unknown> } }).theme = {
+    config: { analytics: { shopify: true, standardEvents: true } },
+  };
+
+  const warns: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warns.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+  };
+
+  try {
+    runtime.initRuntime();
+    document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+    await new Promise((r) => setTimeout(r, 100));
+  } finally {
+    console.warn = origWarn;
+    delete (window as unknown as { StandardEvents?: unknown }).StandardEvents;
+  }
+
+  assert.equal(document.querySelector('#MainContent')?.getAttribute('data-page-type'), 'product');
+  assert.equal(
+    warns.filter((w) => w.includes('PageViewEvent')).length,
+    0,
+    'a malformed global is a silent no-op, not a warning',
   );
 });
 
@@ -1646,5 +1725,230 @@ test("the theme's own cart:mutated still works with the bridge installed", async
     prefetch.getCachedHtml('/products/foo'),
     null,
     'the pre-existing theme-dispatched path is untouched',
+  );
+});
+
+// ─── app-compat interventions (experimental, all default OFF) ───────────────
+// These pin the FLAGS and the SCOPING, not the repair. Whether dispatching a
+// section event or re-executing a bundle actually revives a real app is a
+// storefront measurement — ~/Work/pusha-probe. What is testable here is that the
+// flags default off, that unload fires while the old nodes are still connected,
+// and that re-execution never touches a theme script. That last one is the
+// guardrail: head-sync's dedupe exists because re-running a theme section script
+// throws on redeclaration, and intervention 2 deliberately bypasses that dedupe.
+//
+// The re-execution tests drive the module directly rather than a full nav. jsdom
+// never fetches script srcs, so load/error never fire and a navigation whose
+// fetched <head> carries a <script src> never settles — the same constraint the
+// head-sync test above documents.
+
+const APP_BODY =
+  '<div id="shopify-section-template--1__main" class="shopify-section">' +
+  '<div class="shopify-block">app block</div>' +
+  '</div>';
+
+const EXT_SRC = 'https://cdn.shopify.com/extensions/abc-123/1.0.0/assets/app.js';
+const THEME_SRC = 'https://cdn.shopify.com/s/files/1/theme/section.js';
+
+function sectionEventLog(): { events: string[]; connected: boolean[]; stop: () => void } {
+  const events: string[] = [];
+  const connected: boolean[] = [];
+  const onUnload = (e: Event) => {
+    events.push(`unload:${(e as CustomEvent).detail.sectionId}`);
+    connected.push((e.target as HTMLElement).isConnected);
+  };
+  const onLoad = (e: Event) => {
+    events.push(`load:${(e as CustomEvent).detail.sectionId}`);
+    connected.push((e.target as HTMLElement).isConnected);
+  };
+  document.addEventListener('shopify:section:unload', onUnload);
+  document.addEventListener('shopify:section:load', onLoad);
+  return {
+    events,
+    connected,
+    stop: () => {
+      document.removeEventListener('shopify:section:unload', onUnload);
+      document.removeEventListener('shopify:section:load', onLoad);
+    },
+  };
+}
+
+test('appCompat: section events do not fire unless the flag is set', async () => {
+  document.querySelector('#MainContent')!.innerHTML = APP_BODY;
+  fetchResponder = () => ({ status: 200, body: makePageHtml('product', APP_BODY) });
+  const spy = sectionEventLog();
+
+  try {
+    runtime.initRuntime();
+    document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+    await new Promise((r) => setTimeout(r, 100));
+  } finally {
+    spy.stop();
+  }
+
+  assert.equal(document.querySelector('#MainContent')?.getAttribute('data-page-type'), 'product');
+  assert.deepEqual(spy.events, [], 'nothing dispatched with appCompat unset');
+});
+
+test('appCompat.sectionEvents: unload then load, both on connected nodes', async () => {
+  document.querySelector('#MainContent')!.innerHTML = APP_BODY;
+  fetchResponder = () => ({ status: 200, body: makePageHtml('product', APP_BODY) });
+  const spy = sectionEventLog();
+
+  try {
+    runtime.initRuntime({ appCompat: { sectionEvents: true } });
+    document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+    await new Promise((r) => setTimeout(r, 100));
+  } finally {
+    spy.stop();
+  }
+
+  // Ordering is the contract: unload → remove → insert → load.
+  assert.deepEqual(spy.events, ['unload:template--1__main', 'load:template--1__main']);
+  // Both targets must be connected when their event fires. An unload dispatched
+  // on a detached node is useless — a listener cannot reach its own DOM to clean
+  // up, which is the entire reason to fire unload at all.
+  assert.deepEqual(spy.connected, [true, true], 'both events fire on connected nodes');
+});
+
+test('appCompat.sectionEvents: the section id is the full dynamic id, not a JSON key', async () => {
+  // api/ajax/section-rendering.md:116-126 — detail.sectionId must match the
+  // wrapper's id minus the prefix, e.g. `sections--1234__header`. Deriving it any
+  // other way (parsing template JSON, splitting on `__`) breaks section groups.
+  document.querySelector('#MainContent')!.innerHTML =
+    '<div id="shopify-section-sections--1234__header"></div>' +
+    '<div id="shopify-section-template--5678__image_banner"></div>';
+  fetchResponder = () => ({ status: 200, body: makePageHtml('product', '<h1>P</h1>') });
+  const spy = sectionEventLog();
+
+  try {
+    runtime.initRuntime({ appCompat: { sectionEvents: true } });
+    document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+    await new Promise((r) => setTimeout(r, 100));
+  } finally {
+    spy.stop();
+  }
+
+  assert.deepEqual(spy.events, [
+    'unload:sections--1234__header',
+    'unload:template--5678__image_banner',
+  ]);
+});
+
+test('appCompat.reexecuteExtensionScripts: re-runs extension bundles, never theme scripts', async () => {
+  const appCompat = await import('../src/app-compat.ts');
+  const headSync = await import('../src/head-sync.ts');
+  delete (window as unknown as { __pushaLoadedScripts?: Set<string> }).__pushaLoadedScripts;
+
+  const incoming = new DOMParser().parseFromString(
+    makePageHtml('product', APP_BODY).replace(
+      '</head>',
+      `<script src="${EXT_SRC}" async></script><script src="${THEME_SRC}" defer></script></head>`,
+    ),
+    'text/html',
+  );
+
+  const countSrc = (needle: string) =>
+    Array.from(document.querySelectorAll('script[src]')).filter((s) =>
+      (s.getAttribute('src') ?? '').includes(needle),
+    ).length;
+
+  // First pass: head-sync brings both in and records them as loaded.
+  void headSync.syncHeadScripts(incoming);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(countSrc('/extensions/'), 1, 'head-sync loads the extension script once');
+  assert.equal(countSrc('/theme/section.js'), 1, 'head-sync loads the theme script once');
+
+  // Second pass: head-sync dedupes both. Nothing is added.
+  void headSync.syncHeadScripts(incoming);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(countSrc('/extensions/'), 1, 'dedupe holds for the extension script');
+  assert.equal(countSrc('/theme/section.js'), 1, 'dedupe holds for the theme script');
+
+  // The intervention bypasses that dedupe for extension-origin URLs ONLY.
+  void appCompat.reexecuteExtensionScripts(incoming, { reexecuteExtensionScripts: true });
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(countSrc('/extensions/'), 2, 'the extension bundle is re-added');
+  assert.equal(
+    countSrc('/theme/section.js'),
+    1,
+    'the theme script is NOT re-added — that is what head-sync dedupe protects',
+  );
+});
+
+test('appCompat.reexecuteExtensionScripts: off by default, and a no-op without app scripts', async () => {
+  const appCompat = await import('../src/app-compat.ts');
+  delete (window as unknown as { __pushaLoadedScripts?: Set<string> }).__pushaLoadedScripts;
+
+  const incoming = new DOMParser().parseFromString(
+    makePageHtml('product', APP_BODY).replace(
+      '</head>',
+      `<script src="${EXT_SRC}" async></script></head>`,
+    ),
+    'text/html',
+  );
+  const extCount = () => document.querySelectorAll('script[src*="/extensions/"]').length;
+  const before = extCount();
+
+  // No config at all.
+  void appCompat.reexecuteExtensionScripts(incoming);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(extCount(), before, 'undefined config re-executes nothing');
+
+  // Flag explicitly false.
+  void appCompat.reexecuteExtensionScripts(incoming, { reexecuteExtensionScripts: false });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(extCount(), before, 'an explicit false re-executes nothing');
+
+  // Flag on, but the page carries no extension scripts.
+  const noApps = new DOMParser().parseFromString(
+    makePageHtml('product', '<h1>P</h1>'),
+    'text/html',
+  );
+  void appCompat.reexecuteExtensionScripts(noApps, { reexecuteExtensionScripts: true });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(extCount(), before, 'nothing to re-execute is not an error');
+});
+
+test('appCompat: enabling both flags warns, because they compound multiplicatively', async () => {
+  // Run 3 measured the interaction: re-execution accumulates listener copies and
+  // section events then fire all of them, once per section, per nav. A variant
+  // clean under either flag alone recorded 14 double-inits under both.
+  const logs: string[] = [];
+  const origLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+  };
+
+  try {
+    runtime.initRuntime({ debug: true, appCompat: { sectionEvents: true, reexecuteExtensionScripts: true } });
+  } finally {
+    console.log = origLog;
+  }
+
+  assert.ok(
+    logs.some((l) => l.includes('BOTH appCompat flags')),
+    'the conflicting-flag warning fires',
+  );
+});
+
+test('appCompat: one flag alone does not warn', async () => {
+  const logs: string[] = [];
+  const origLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+  };
+
+  try {
+    runtime.initRuntime({ debug: true, appCompat: { sectionEvents: true } });
+  } finally {
+    console.log = origLog;
+  }
+
+  assert.equal(
+    logs.filter((l) => l.includes('BOTH appCompat flags')).length,
+    0,
+    'a single flag is a supported configuration',
   );
 });

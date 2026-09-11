@@ -13,6 +13,12 @@
 //   - design-mode (theme editor) disables PJAX and wires shopify:section:* events
 
 import { firePageView } from './analytics.js';
+import {
+  dispatchSectionLoad,
+  dispatchSectionUnload,
+  reexecuteExtensionScripts,
+  warnOnConflictingAppCompat,
+} from './app-compat.js';
 import { installCartBridge, uninstallCartBridge } from './cart.js';
 import { getConfig, resolveConfig } from './config.js';
 import { checkContainer, log as dlog, recordNavigation, setDebug } from './diagnostics.js';
@@ -332,6 +338,10 @@ async function navigate(url: string, options: { isPopState?: boolean; replace?: 
     // and any custom elements inside get upgraded against the live registry on
     // creation. Plain cloneNode + replaceWith adopts at insert time, which
     // can miss upgrades for nested custom elements.
+    // EXPERIMENTAL (off by default): let app code clean up while its own nodes
+    // are still connected. Ordering is unload → remove → insert → load.
+    dispatchSectionUnload(currentContainer, config.appCompat);
+
     const fresh = document.importNode(newContainer, true) as HTMLElement;
     currentContainer.replaceWith(fresh);
     dlog('nav', `swapped ${config.containerSelector} (${fresh.children.length} child nodes)`);
@@ -343,6 +353,13 @@ async function navigate(url: string, options: { isPopState?: boolean; replace?: 
     if (typeof customElements !== 'undefined') {
       customElements.upgrade(fresh);
     }
+
+    // EXPERIMENTAL (off by default), in the order a real document load would
+    // produce: the bundle executes first, then section lifecycle events fire.
+    // Both run after insertion — a re-executed bundle queries the DOM as it
+    // runs, and at head-sync time the new container is not in it yet.
+    await reexecuteExtensionScripts(doc, config.appCompat);
+    dispatchSectionLoad(fresh, config.appCompat);
     currentPageUrl = targetUrl.href;
 
     const meta: NavMeta = {
@@ -550,6 +567,7 @@ export function initRuntime(config?: PushaConfig): void {
   const resolved = resolveConfig(config);
   setDebug(resolved.debug === true);
   dlog('boot', 'initRuntime', { pjax: resolved.pjax, transitions: resolved.transitions, prefetch: !!resolved.prefetchConfig });
+  warnOnConflictingAppCompat(resolved.appCompat);
 
   // Boot the registered components on initial load.
   runInitPage();
