@@ -62,7 +62,7 @@ Add this to `layout/theme.liquid`, before you render the Pusha snippet:
 Add this to your theme JavaScript:
 
 ```js
-import { onAfterInit } from '@mimetic/pusha/hooks';
+import { onAfterInit } from '@mimeticthemes/pusha/hooks';
 
 onAfterInit(async (container) => {
   const el = container.querySelector('#judgeme_product_reviews');
@@ -179,4 +179,4 @@ All facts above come from Judge.me's own documentation:
 - Platform-independent widgets —
   https://judge.me/help/en/articles/8394958-installing-judge-me-widgets-on-external-platforms
 
-Full research trail, including what was rejected: `~/Work/pusha-probe/pusha-probe/results.md`.
+Full research trail, including what was rejected: `pusha-probe/results.md`.
