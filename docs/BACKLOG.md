@@ -4,7 +4,9 @@ Open work, ranked. Written 2026-09-11 at the end of a long session, so the
 reasoning is recorded rather than just the task — the *why* is the part that
 gets lost.
 
-Closed items are not listed; `git log` has them.
+Closed items are not listed; `git log` has them. Numbers are stable identifiers,
+not an ordering — a closed item leaves a gap rather than renumbering everything
+below it, because other documents cite these by number.
 
 ---
 
@@ -13,8 +15,21 @@ Closed items are not listed; `git log` has them.
 ### 1. Islands have never run in a browser
 
 The rig has no `data-island` anywhere, so the hash-URL fix — the most
-consequential bug in the last round — is only covered by a jsdom test. Mark a
-price or badge region in a Horizon section and walk it.
+consequential bug in the last round — is only covered by a jsdom test.
+
+**Rig is now built; the walk is what remains.** `snippets/pusha-island-test.liquid`
+marks the product-information section as an island and carries a Liquid render
+stamp, which is what makes the result readable: `now` renders server-side, so a
+section served from the prefetch cache shows the time it was *warmed*, and
+revalidation moves it forward. `__navAudit.islands()` in `assets/nav-audit.js`
+warms, clicks, and reports.
+
+The trap it exists to avoid: islands fire **only on a cached navigation**, so a
+hover that is too short caches nothing, nothing fires, and the run looks like
+islands failing rather than the setup failing. The instrument reports `cached`
+alongside the result so that case is named rather than guessed at. It dispatches
+`mouseover`, not `mouseenter` — the runtime delegates from `document` and only
+sees bubbling events.
 
 ### 2. Measure the Klaviyo claim before repeating it
 
@@ -38,9 +53,20 @@ The rename sweep narrows this usefully: one deliberate mention now survives in
 is a comment. If the message appears again it did not come from the rig —
 suspect a stale bundle, a cached asset, or the browser profile.
 
-Possibly related and separately confirmed: `Autofocus processing was blocked
-because a document already has a focused element` on Horizon's collection page
-(see item 6).
+Two more were found and removed 2026-09-12 — "the moss audit" in
+`shopify-xr-init.js` and "moss.min.js" in `theme-editor.js`, both comments.
+Neither could have produced a console message, but reasoning from the absence
+of the old name while two stale references sat in the tree is how this hunt
+stays confusing. The tree is now clean apart from the one deliberate mention.
+
+Possibly related, and now **fixed rather than open**: `Autofocus processing was
+blocked because a document already has a focused element` on Horizon's
+collection page was item 6. It turned out not to be benign — the message is the
+browser *declining* to run autofocus on swapped-in content, so the attribute was
+silently dead on every soft navigation and Pusha's focus-to-container then took
+the focus the author had asked for. Pusha now applies it in the browser's place.
+If the Moss message and the autofocus message were ever the same sighting, one
+of them is now accounted for.
 
 ---
 
@@ -63,22 +89,31 @@ before the release is real.
 
 ### 5. Repo hygiene
 
-No `CONTRIBUTING.md`, `CHANGELOG.md`, `SECURITY.md`, or issue template.
-`CLAUDE.md` is 55 KB of public strategy — it should be ~2 KB (what the project
-is, the commands, "the README is authoritative", the vocabulary rule) with the
-rest in the vault. `docs/STATE-2026-09-11.md` and
-`docs/questions-for-shopify-dev.md` still read as internal notes.
+`CONTRIBUTING.md`, `CHANGELOG.md` and `SECURITY.md` landed 2026-09-12.
+CONTRIBUTING carries the four-surfaces rule, because a contributor is the reader
+most likely to change one surface and leave the other three. SECURITY routes
+through GitHub private vulnerability reporting and names what is *not* a
+vulnerability — the pixel gap and app code going inert are measured
+limitations, and a triage queue that re-litigates them each time is worse than
+one that says so up front.
+
+**Still open, and both need a decision rather than typing:**
+
+- No issue template.
+- No security contact address. SECURITY.md deliberately has none rather than an
+  invented one that would bounce. Add a real address or leave GitHub reporting
+  as the only channel.
+- `CLAUDE.md` is 55 KB of public strategy — it should be ~2 KB (what the
+  project is, the commands, "the README is authoritative", the four-surfaces
+  rule, the vocabulary rule) with the rest in the vault. The split is the
+  decision: which sections are *rationale a contributor needs* and which are
+  *studio strategy that should not be in a public repo at all*.
+- `docs/STATE-2026-09-11.md` and `docs/questions-for-shopify-dev.md` still read
+  as internal notes.
 
 ---
 
 ## Known bugs, none blocking
-
-### 6. `Autofocus processing was blocked because a document already has a focused element`
-
-Seen on Horizon's collection page, and **reproduced 2026-09-11** on a second
-walk — same page, same message. Pusha's focus-to-container beats the page's own
-autofocus. Benign today; decide whether the a11y focus move should yield to an
-explicit `[autofocus]` in the incoming content.
 
 ### 7. Deploy the probe reporter fix
 
@@ -95,11 +130,13 @@ vocabulary does not work.
 entry. Extension assets need `shopify app deploy` before a run picks it up, so
 until then the next probe reads the stale bundle.
 
-Two notes on that repo. It has no remote, so its history is local only. And
-`~/Work/pusha-probe` is a stray empty git repo wrapping the real one at
-`~/Work/pusha-probe/pusha-probe` — running git in the wrapper reports an empty
-repository, which is how this backlog came to claim the probe had no commits.
-Delete the outer `.git`.
+One note on that repo: it has no remote, so its history is local only.
+
+The stray outer git repo is **gone** (2026-09-12). `~/Work/pusha-probe` wrapped
+the real repo at `~/Work/pusha-probe/pusha-probe`, and running git in the
+wrapper reported an empty repository — which is how this backlog came to claim
+the probe had no commits at all. It had zero commits, zero refs and zero
+stashes, so nothing was lost.
 
 ### 8. Bucket H still reports the bridge snippet on a ported theme
 
