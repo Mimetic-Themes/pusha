@@ -682,6 +682,55 @@ nowhere to go. Run the port with `debug: true` and the log prints `NO TARGET`
 for exactly that, plus `swapped <applied>/<requested>` so a partial apply is
 visible.
 
+### R. Island candidates — stale-prone regions in the container
+
+Bucket L is this question asked about the persistent shell. R is the
+in-container answer, and the two never overlap: an L finding freezes because the
+shell is never swapped, an R finding goes stale because the page HTML came out
+of the prefetch cache minutes ago.
+
+**The audit proposes; it never marks.** Revalidating a section costs a request
+and re-runs that section's JS, so marking a region that does not actually change
+is a tax on every cached navigation. `mark` findings are `decide`, not
+`transform` — group them by section, show the sub-letter, and let the human pick.
+
+The transform, once a candidate is accepted:
+
+```liquid
+<div class="price-block"
+     data-island
+     data-section-id="{{ section.id }}">
+  {{ product.selected_or_first_available_variant.price | money }}
+</div>
+```
+
+Four things have to hold, and each fails silently when it does not:
+
+1. **The marker is inside the swap container.** Islands are collected from the
+   swapped container only. A marker in the shell never revalidates.
+2. **`data-section-id` is present and non-empty.** The runtime matches
+   `[data-island][data-section-id]`; a bare `data-island` is inert.
+3. **The id names a `#shopify-section-<id>` wrapper in the same document.**
+   Shopify keys the Section Rendering API response by section id and Pusha
+   replaces that wrapper. An id with no wrapper is fetched and then has nowhere
+   to go — the run logs `NO TARGET`.
+4. **`section` is actually in scope.** Sections and theme blocks get it from the
+   renderer. Snippets do not: `{% render %}` does not inherit the caller's
+   scope, so a snippet writing `{{ section.id }}` needs `section: section` at
+   every render site or the attribute renders empty. The audit checks the real
+   render sites and names the ones that miss it, rather than flagging every such
+   snippet on shape.
+
+**Verify in a browser, not in jsdom.** A stubbed fetch answers whatever the test
+tells it to, which is how islands shipped for a release sending an
+`Accept: application/json` header that made Shopify return the product JSON
+instead of the sections JSON — 200, valid JSON, parsed fine, swapped nothing.
+Run with `debug: true` and read `swapped <applied>/<requested>`.
+
+Islands only revalidate on a **cached** navigation. An uncached one was just
+fetched, so everything on it is current and nothing fires — a walk that does not
+warm the page first reports a false negative.
+
 **3. Mark as reload boundary.**
 
 For L-B auth flows specifically: add the relevant route to `data-no-transition` (the skill's bucket H/K escape hatch) so the link forces a full nav, refreshing the persistent shell's `customer.*` state. Pusha already excludes these from interception — the authority is `SHOPIFY_RESERVED` in `src/routes.ts`, shared by link interception and prefetch so the two cannot disagree. It currently covers `/checkout(s)`, the `/account/*` auth routes, `/customer_authentication/*`, `/password`, `/localization`, `/gift_card(s)`, the app proxy `/a/*`, and the GET routes that mutate cart state (`/cart/add`, `/cart/change`, `/cart/update`, `/cart/clear`, cart permalinks) plus `/discount/*`. Read the regex rather than trusting this list.

@@ -9,6 +9,10 @@
 //   - new-liquid:   blocks + .liquid templates + factory custom elements
 //   - analytics-surface: every bucket-J defect (coverage, conformance,
 //     placement, raw pixels) against one well-formed marker as the control
+//   - island-candidates: every bucket-R marker defect (no data-section-id, a
+//     marker in the shell, a snippet whose render sites pass no `section:`)
+//     against one correctly-wired snippet island as the control, plus
+//     candidates in a section and a theme block
 // Together they exercise every bucket (A–P) plus the comment/doc-stripping and
 // factory-classification edge cases from the block-based-coverage work.
 //

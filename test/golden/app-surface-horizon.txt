@@ -54,6 +54,10 @@ whitelists: on (default — pass --no-whitelist to disable)
   A missing or malformed marker never throws — the event simply stops reaching Meta/GA4/TikTok/Klaviyo.
   Validate on a published theme with live pixels; a preview environment won't show the loss.
 
+## R. Island candidates — stale-prone regions in the container
+  Island candidates — stale-prone regions INSIDE the swap container. Bucket L asks the same question about the persistent shell; R is the in-container answer, and they do not overlap (L freezes because the shell is never swapped, R goes stale because the page HTML came from the prefetch cache). Remedy is opt-in markup on the region root: `data-island data-section-id="{{ section.id }}"`. Pusha never infers islands — revalidating costs a request and re-runs the section JS, so a wrong guess taxes every cached navigation; these are CANDIDATES to accept or decline. Ranks: mark=clear candidate (price, availability, inventory, selected variant, render-time values), ask=depends on the store, ok=already marked, gap=a marker that cannot work. Sub-letters: A=price, B=availability/inventory, C=variant state, D=cart-derived (already covered by cart:mutated invalidation — verify the theme dispatches it), E=render-time values, marker=conformance of an existing data-island. THE ID MUST NAME A `#shopify-section-<id>` WRAPPER THAT EXISTS IN THE SAME DOCUMENT: Shopify keys the Section Rendering API response by section id and Pusha replaces that wrapper, so an id with no wrapper is fetched and then has nowhere to go. Sections and theme blocks get `section` from the renderer; snippets do not, so a snippet writing {{ section.id }} needs `section: section` passed at the render site or the attribute renders empty and fails the selector silently. Run the ported theme with `debug: true` — the runtime prints `swapped <applied>/<requested>`, `NO TARGET` for an id with no wrapper, and `RESPONSE MISMATCH` when the server did not key the response by what was asked for.
+  (none)
+
 ## P. Partials — server-rendered refresh regions (informational)
   Informational — {% partial %} + @shopify/partial-rendering regions (new-Liquid's islands substrate). The inventory maps each partial to its consumers. The partial name is a load-bearing string contract (renaming a declaration breaks every consumer), and Pusha must coordinate its container swap with the theme's partials.apply() so a nav mid-refresh has defined ordering.
   (none)
@@ -85,6 +89,7 @@ whitelists: on (default — pass --no-whitelist to disable)
   M persistent-shell stateful UI: 0  (modals: 0, body-class lockouts: 0)
   J analytics surface:           1  (gaps: 1, advisory: 0)
   P partials:                    0
+  R island candidates:           0  (mark: 0, ask: 0, already marked: 0, broken markers: 0)
   X theme app extensions:        0  (at-risk: 0, survives: 0, embeds survives-verify: 0; @app sites: 4)
 
 ## Suppressed by whitelists

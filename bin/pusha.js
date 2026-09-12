@@ -1199,6 +1199,185 @@ function detectLiquidPersistentState(file, themePath) {
   return findings;
 }
 
+// ─── Bucket R: island candidates ────────────────────────────────────────────
+// Stale-prone regions INSIDE the swap container. Bucket L is the same question
+// asked about the persistent shell; R is the in-container answer, and the two
+// do not overlap — L findings freeze because the shell is never swapped, R
+// findings go stale because the page HTML came out of the prefetch cache.
+//
+// The remedy is opt-in markup, never inference. Pusha does not and must not
+// guess which regions are stale-prone: revalidating a section costs a request
+// and re-running its JS, so a wrong guess is a tax on every cached navigation.
+// This bucket produces CANDIDATES for a human or agent to accept or decline.
+//
+// Ranks: `mark` — clear candidate, add the attributes. `ask` — plausible but
+// the call depends on the merchant (a price that never changes is not stale).
+// `ok` — already marked and correctly wired.
+const R_PATTERNS = [
+  // R-A price — the canonical island. Prefetch TTLs are minutes; a price
+  // change inside that window is served stale from cache.
+  { sub: 'A', rank: 'mark', re: /\|\s*money(_with_currency|_without_currency|_without_trailing_zeros)?\b/, what: 'money filter' },
+  { sub: 'A', rank: 'mark', re: /\b(compare_at_price|price_varies|price_min|price_max)\b/, what: 'price comparison/range' },
+
+  // R-B availability — the one that costs a sale. A sold-out variant served
+  // from cache lets a buyer add to cart and fail at checkout.
+  { sub: 'B', rank: 'mark', re: /\b(available|sold_out)\b/, what: 'availability' },
+  { sub: 'B', rank: 'mark', re: /\binventory_(quantity|policy|management)\b/, what: 'inventory.*' },
+
+  // R-C variant state — selected variant drives price and availability, so a
+  // stale variant object is both of the above at once.
+  { sub: 'C', rank: 'mark', re: /\bselected_or_first_available_variant\b/, what: 'selected_or_first_available_variant' },
+  { sub: 'C', rank: 'ask', re: /\bcurrent_variant\b/, what: 'current_variant' },
+
+  // R-D cart-derived inside the container. Already covered by cart:mutated
+  // invalidating the cache, so this is a verify rather than a fix — listed
+  // because a theme that dispatches no cart:mutated has neither mechanism.
+  { sub: 'D', rank: 'ok', re: /\bcart\.(item_count|total_price|items_subtotal_price)\b/, what: 'cart.* in container' },
+
+  // R-E render-time values. `now` is the clearest case in the language: the
+  // value is wrong the moment it is cached.
+  { sub: 'E', rank: 'mark', re: /['"]now['"]\s*\|\s*date\b/, what: "'now' | date" },
+];
+
+// A marker that cannot work. Each of these renders without error and silently
+// never revalidates, which is the failure mode this bucket exists to prevent —
+// islands shipped for a whole release with none of these checks and nobody
+// noticed, because nothing throws.
+function checkIslandMarkers(file, themePath, loc) {
+  const rel = relative(themePath, file);
+  const text = stripLiquidComments(readFileText(file));
+  const lines = text.split('\n');
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (!/\bdata-island\b/.test(ln)) continue;
+    const line = i + 1;
+    const match = ln.trim().slice(0, 160);
+
+    // The attributes may be spread over several lines of one tag, so look at a
+    // small window rather than the single line.
+    const windowText = lines.slice(Math.max(0, i - 6), i + 7).join('\n');
+    const hasSectionId = /\bdata-section-id\s*=/.test(windowText);
+
+    if (!hasSectionId) {
+      out.push({ file: rel, line, match, sub: 'marker', rank: 'gap', location: loc,
+        what: 'data-island with no data-section-id — findIslands matches [data-island][data-section-id], so this is inert' });
+      continue;
+    }
+    if (loc === 'shell') {
+      out.push({ file: rel, line, match, sub: 'marker', rank: 'gap', location: loc,
+        what: 'data-island in the persistent shell — islands are collected from the swapped container only, so this never revalidates' });
+      continue;
+    }
+    // `{% render %}` does not inherit the caller's scope. A snippet writing
+    // `{{ section.id }}` without being passed `section` renders an EMPTY id,
+    // and an empty data-section-id fails the attribute selector silently.
+    if (loc === 'include' && /\bdata-section-id\s*=\s*["']\{\{-?\s*section\.id/.test(windowText)) {
+      // Verify before reporting. The snippet is only broken if a caller fails
+      // to pass `section:` — a correctly-wired island would otherwise be
+      // reported as dead, which is the same error as suppressing on shape,
+      // inverted.
+      const snippetName = rel.replace(/^snippets\//, '').replace(/\.liquid$/, '');
+      const bad = renderSitesMissingSection(themePath, snippetName);
+      if (bad.length) {
+        out.push({ file: rel, line, match, sub: 'marker', rank: 'gap', location: loc,
+          what: `snippet writes {{ section.id }} and {% render %} does not inherit scope — these render sites pass no \`section:\`, so the id renders empty there: ${bad.join(', ')}` });
+        continue;
+      }
+    }
+    out.push({ file: rel, line, match, sub: 'marker', rank: 'ok', location: loc,
+      what: 'island marker present with a section id' });
+  }
+  return out;
+}
+
+function detectIslandCandidates(themePath, shellRelSet) {
+  const findings = [];
+  const dirs = ['sections', 'blocks', 'snippets', 'templates'];
+  for (const dir of dirs) {
+    const abs = join(themePath, dir);
+    if (!existsSync(abs)) continue;
+    for (const file of walkFiles(abs, ['.liquid'])) {
+      const rel = relative(themePath, file);
+      const loc = locationClass(rel, shellRelSet);
+
+      // Marker conformance runs everywhere, including the shell — a marker in
+      // the shell is precisely one of the things worth reporting.
+      findings.push(...checkIslandMarkers(file, themePath, loc));
+
+      // Candidates are an in-container question only. Shell staleness is
+      // bucket L and has different remedies.
+      if (loc === 'shell') continue;
+
+      const text = stripLiquidComments(readFileText(file));
+      if (/\bdata-island\b/.test(text)) continue; // already marked — no candidate noise
+      const lines = text.split('\n');
+      const seen = new Set();
+      for (let i = 0; i < lines.length; i++) {
+        const ln = lines[i];
+        for (const pat of R_PATTERNS) {
+          if (!pat.re.test(ln)) continue;
+          // One finding per file+sub. A product template mentions `money`
+          // fifteen times and they are all the same decision.
+          const key = `${rel}:${pat.sub}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          findings.push({
+            file: rel,
+            line: i + 1,
+            match: ln.trim().slice(0, 160),
+            sub: pat.sub,
+            rank: pat.rank,
+            location: loc,
+            what: pat.what,
+            sectionIdInScope: sectionIdResolvable(text, loc),
+          });
+        }
+      }
+    }
+  }
+  return findings;
+}
+
+// Can this file write a usable `data-section-id`? Sections and theme blocks get
+// `section` from the renderer. Snippets do not — verified against a Horizon
+// port, where 13 of 93 blocks read `section.id` happily while snippets have to
+// be handed it at the render site.
+function sectionIdResolvable(text, loc) {
+  if (loc === 'section' || loc === 'block') return true;
+  if (loc === 'include') return /\bsection\.id\b/.test(text) ? 'passed-in-required' : false;
+  return false;
+}
+
+// Which render sites of this snippet fail to pass `section:`? Verified rather
+// than assumed: a snippet reading `{{ section.id }}` is only broken if the
+// render tag does not hand it `section`, and flagging every such snippet on
+// shape alone reports a working island as broken. Returns the offending sites,
+// so an empty array means every caller is correct.
+function renderSitesMissingSection(themePath, snippetName) {
+  const missing = [];
+  for (const dir of ['sections', 'blocks', 'snippets', 'layout', 'templates']) {
+    const abs = join(themePath, dir);
+    if (!existsSync(abs)) continue;
+    for (const file of walkFiles(abs, ['.liquid'])) {
+      const text = stripLiquidComments(readFileText(file));
+      // The whole tag, which may wrap across lines when it carries arguments.
+      const re = new RegExp(
+        `\\{%-?\\s*(?:render|include)\\s+['"]${snippetName}['"]([\\s\\S]*?)-?%\\}`,
+        'g',
+      );
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const args = m[1] ?? '';
+        if (/\bsection\s*:/.test(args)) continue;
+        const line = text.slice(0, m.index).split('\n').length;
+        missing.push(`${relative(themePath, file)}:${line}`);
+      }
+    }
+  }
+  return missing;
+}
+
 // ─── Bucket M: persistent-shell stateful UI ─────────────────────────────────
 // Modals, drawers, overlays, and dropdowns that live OUTSIDE #MainContent and
 // were authored assuming a full reload would dismiss them. PJAX swaps don't
@@ -1333,7 +1512,7 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
     if (!existsSync(dirs[name])) console.error(`! ${name}/ not found at ${dirs[name]} — skipping`);
   }
 
-  const findings = { A: [], B: [], C: [], D: [], E: [], F: [], G: [], H: [], J: [], K: [], L: [], M: [], P: [], X: [], unknown: [] };
+  const findings = { A: [], B: [], C: [], D: [], E: [], F: [], G: [], H: [], J: [], K: [], L: [], M: [], P: [], R: [], X: [], unknown: [] };
   // Each entry: { bucket, file, line?, match?, reason? } — the would-have-been
   // finding plus why it was suppressed. `files` keyed by Pusha-self filenames;
   // `G` keyed by the file-level Pusha.on* trigger; `H` keyed by line patterns.
@@ -1536,6 +1715,12 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
   // location class so the report prescribes a paradigm-correct fix instead of a
   // blanket "wrap in sectionInits".
   const shellRelSet = new Set(shellFiles.map((f) => relative(themePath, f)));
+
+  // R — island candidates. Runs after the shell is resolved because the whole
+  // question is "is this inside the swap container", and that is what the shell
+  // resolution answers.
+  findings.R = detectIslandCandidates(themePath, shellRelSet);
+
   for (const f of findings.E) {
     let loc = locationClass(f.file, shellRelSet);
     if (loc === 'shell' && inlineScriptIsConfigOnly(join(themePath, f.file), f.line)) loc = 'head-config';
@@ -1638,6 +1823,11 @@ function auditTheme(themePath, { useWhitelists = true } = {}) {
     M_body_classes: findings.M.filter((x) => x.kind === 'body-class').length,
     P: findings.P.length,
     P_gaps: findings.P.filter((x) => x.dangling === 'undeclared').length,
+    R: findings.R.length,
+    R_mark: findings.R.filter((x) => x.rank === 'mark').length,
+    R_ask: findings.R.filter((x) => x.rank === 'ask').length,
+    R_gaps: findings.R.filter((x) => x.rank === 'gap').length,
+    R_marked: findings.R.filter((x) => x.sub === 'marker' && x.rank === 'ok').length,
     J: findings.J.length,
     J_gaps: findings.J.filter((x) => x.rank === 'gap').length,
     J_warns: findings.J.filter((x) => x.rank === 'warn').length,
@@ -2130,6 +2320,7 @@ const BUCKET_RULES = {
   L: 'Per-request Liquid in the layout shell (layout/theme.liquid, section groups, transitively-rendered snippets) freezes on first load. Sub-letters mirror the request-scoped taxonomy: A=URL/template, B=customer, C=cart, D=locale, E=per-page object, F=personalization, G=time, H=app-injected. Rank: auto=URL-derivable in JS, ask=user decides (full-reload boundary or section refetch), ok=already handled by Pusha or theme convention.',
   M: 'Persistent-shell stateful UI — modals/drawers/overlays that lived outside #MainContent and were authored assuming a full reload would dismiss them. Three remediation options: (1) add `data-pusha-close-on-nav` to the root (Pusha strips `[open]` / sets `aria-expanded="false"` / removes body classes listed in `data-pusha-body-class-on-open`); (2) implement a `closeOnNav()` method on the custom element; (3) call `Pusha.onBeforeLeave(() => this.close())` manually. Cart drawers and persistent widgets simply omit the marker — opt-in is the safe default.',
   J: 'Analytics surface. NOTE: Pusha reaches the pixel sandbox only through PREFIXED CUSTOM events — the customEvents bridge publishes pusha:page_viewed plus prefixed copies of the page-type payloads, and those are delivered to custom pixels and app pixels. What is fenced is publishing under STANDARD names, which the storefront API rejects, so a standard page_viewed never arrives on a swap. Delivery is not consumption: a third-party app pixel subscribed to the standard vocabulary has no mapping for a prefixed name, so reviving it still needs a companion custom pixel that forwards the event (docs/analytics-companion-pixel.md, README "Analytics & tracking"). This bucket checks the theme-serialized <script type="application/json" data-pusha-analytics-event> blocks anyway, because they are hand-written Liquid that nothing validates at runtime and keeping their shape right is what makes a supported publish path cheap to adopt later. Four kinds: coverage (a product/collection/search/cart page with no marker), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and would republish one page\'s payload forever), and raw-pixel (gtag/fbq/dataLayer calls installed directly in the theme — refire them manually from onAfterInit; do NOT migrate them into Customer Events, which would move a working pixel onto the unreachable channel).',
+  R: 'Island candidates — stale-prone regions INSIDE the swap container. Bucket L asks the same question about the persistent shell; R is the in-container answer, and they do not overlap (L freezes because the shell is never swapped, R goes stale because the page HTML came from the prefetch cache). Remedy is opt-in markup on the region root: `data-island data-section-id="{{ section.id }}"`. Pusha never infers islands — revalidating costs a request and re-runs the section JS, so a wrong guess taxes every cached navigation; these are CANDIDATES to accept or decline. Ranks: mark=clear candidate (price, availability, inventory, selected variant, render-time values), ask=depends on the store, ok=already marked, gap=a marker that cannot work. Sub-letters: A=price, B=availability/inventory, C=variant state, D=cart-derived (already covered by cart:mutated invalidation — verify the theme dispatches it), E=render-time values, marker=conformance of an existing data-island. THE ID MUST NAME A `#shopify-section-<id>` WRAPPER THAT EXISTS IN THE SAME DOCUMENT: Shopify keys the Section Rendering API response by section id and Pusha replaces that wrapper, so an id with no wrapper is fetched and then has nowhere to go. Sections and theme blocks get `section` from the renderer; snippets do not, so a snippet writing {{ section.id }} needs `section: section` passed at the render site or the attribute renders empty and fails the selector silently. Run the ported theme with `debug: true` — the runtime prints `swapped <applied>/<requested>`, `NO TARGET` for an id with no wrapper, and `RESPONSE MISMATCH` when the server did not key the response by what was asked for.',
   P: 'Informational — {% partial %} + @shopify/partial-rendering regions (new-Liquid\'s islands substrate). The inventory maps each partial to its consumers. The partial name is a load-bearing string contract (renaming a declaration breaks every consumer), and Pusha must coordinate its container swap with the theme\'s partials.apply() so a nav mid-refresh has defined ordering.',
   X: 'Theme app extensions. Informational + advisory — an app\'s code cannot be mechanically transformed, so X inventories app surfaces and assigns each a swap-safety verdict routed by location. Two reports: X-surface lists every { "type": "@app" } declaration in a {% schema %}, split by container membership — a risk map that stays valid when the merchant installs something tomorrow, and it works with zero apps installed. X-placed recursively walks the blocks tree of every templates/*.json and sections/*.json plus config/settings_data.json -> current.blocks, and reports what is actually installed. Detection parses JSON and reads `type`: a text match misses the escaped `shopify:\\/\\/apps\\/` encoding Shopify writes into some template files, and would report the flagship product template as app-free. Verdicts: at-risk (app block inside the swap container), survives (app block in a section group), survives-verify (app embed — outside the container, but references into the swapped region go stale with no repair signal), opaque (Script Tag API — invisible statically). App embeds with disabled: true are ignored.',
 };
@@ -2296,6 +2487,52 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
     out += NL;
   }
 
+  // R — island candidates. Broken markers first: those are silent, a marker
+  // that cannot work looks identical to one that does.
+  out += `## R. Island candidates — stale-prone regions in the container${NL}`;
+  out += `  ${BUCKET_RULES.R}${NL}`;
+  if (findings.R.length === 0) {
+    out += `  (none)${NL}${NL}`;
+  } else {
+    const brokenMarkers = findings.R.filter((f) => f.rank === 'gap');
+    const okMarkers = findings.R.filter((f) => f.sub === 'marker' && f.rank === 'ok');
+    const marks = findings.R.filter((f) => f.rank === 'mark');
+    const asks = findings.R.filter((f) => f.rank === 'ask');
+    const oks = findings.R.filter((f) => f.sub !== 'marker' && f.rank === 'ok');
+
+    if (brokenMarkers.length) {
+      out += `  Markers that cannot work — these render fine and silently never revalidate:${NL}`;
+      for (const f of brokenMarkers) {
+        out += `    ${f.file}:${f.line}: [R-marker] ${f.what}${NL}`;
+        out += `        ${f.match}${NL}`;
+      }
+    }
+    if (okMarkers.length) {
+      out += `  Already marked:${NL}`;
+      for (const f of okMarkers) out += `    ${f.file}:${f.line}: [R-marker ok] ${f.location}${NL}`;
+    }
+    for (const [label, list] of [
+      ['Candidates — add data-island + data-section-id to the region root:', marks],
+      ['Judgement calls — stale-prone only for some stores:', asks],
+      ['Covered by cart:mutated cache invalidation (verify the theme dispatches it):', oks],
+    ]) {
+      if (!list.length) continue;
+      out += `  ${label}${NL}`;
+      for (const f of list) {
+        const scope =
+          f.sectionIdInScope === true ? ''
+          : f.sectionIdInScope === 'passed-in-required' ? '  [snippet reads section.id — pass `section: section` at the render site]'
+          : '  [no `section` in scope — mark the section that renders this instead]';
+        out += `    ${f.file}:${f.line}: [R-${f.sub} ${f.location}] ${f.what}${scope}${NL}`;
+      }
+    }
+    if (marks.length || asks.length) {
+      out += `  Islands only revalidate on a CACHED navigation — an uncached one was just fetched, so nothing fires.${NL}`;
+      out += `  Verify in a browser with debug: true, not in jsdom: a stubbed fetch answers whatever it is told to.${NL}`;
+    }
+    out += NL;
+  }
+
   // P — partials inventory (informational). Declarations mapped to consumers.
   out += `## P. Partials — server-rendered refresh regions (informational)${NL}`;
   out += `  ${BUCKET_RULES.P}${NL}`;
@@ -2394,6 +2631,7 @@ function printAuditText(themePath, { findings, summary, suppressed, analyticsMar
   out += `  M persistent-shell stateful UI: ${summary.M}  (modals: ${summary.M_modals}, body-class lockouts: ${summary.M_body_classes})${NL}`;
   out += `  J analytics surface:           ${summary.J}  (gaps: ${summary.J_gaps}, advisory: ${summary.J_warns})${NL}`;
   out += `  P partials:                    ${summary.P}${summary.P_gaps ? `  (${summary.P_gaps} consumed-but-undeclared — likely a naming-contract gap)` : ''}${NL}`;
+  out += `  R island candidates:           ${summary.R}  (mark: ${summary.R_mark}, ask: ${summary.R_ask}, already marked: ${summary.R_marked}, broken markers: ${summary.R_gaps})${NL}`;
   out += `${'  X theme app extensions:'.padEnd(33)}${summary.X}  (at-risk: ${summary.X_at_risk}, survives: ${summary.X_survives}, embeds survives-verify: ${summary.X_embeds}; @app sites: ${summary.X_capabilities})${NL}`;
   if (summary.unknown) out += `  ? unknown shape:               ${summary.unknown}${NL}`;
   out += NL;
@@ -2614,7 +2852,7 @@ const DO_NOT_TRANSFORM = {
 
 // Work order. Mechanical buckets first: they are cheap, low-risk, and shrink the
 // report fastest, which keeps a long port legible to the human watching it.
-const BUCKET_WORK_ORDER = ['K', 'F', 'E', 'G', 'M', 'L', 'D', 'H', 'J', 'X', 'C', 'P', 'A', 'B'];
+const BUCKET_WORK_ORDER = ['K', 'F', 'E', 'G', 'M', 'L', 'R', 'D', 'H', 'J', 'X', 'C', 'P', 'A', 'B'];
 const ACTION_WORK_ORDER = ['transform', 'decide', 'verify', 'none'];
 
 function actionFor(bucket, f) {
@@ -2647,6 +2885,13 @@ function actionFor(bucket, f) {
     // a single attribute.
     case 'M': return f.kind === 'custom-modal' ? 'decide' : 'transform';
     case 'X': return f.verdict === 'at-risk' ? 'decide' : 'verify';
+    // A broken marker is a mechanical fix. A candidate is a judgement call —
+    // whether a region is stale-prone enough to spend a request on it depends
+    // on the store, and Pusha must never make that call for a merchant.
+    case 'R':
+      if (f.rank === 'gap') return 'transform';
+      if (f.rank === 'ok') return 'none';
+      return 'decide';
     default: return 'decide';
   }
 }
