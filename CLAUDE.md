@@ -8,6 +8,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **The README is authoritative for the runtime contract.** This file records design rationale — why the contract has the shape it does — and some of it predates the shipped code. Where the two disagree on config keys, defaults, hook signatures, or event payloads, the README (and the source) win.
 
+### The four surfaces must agree, always
+
+`pusha init`, `pusha audit`, the skill (`skill/SKILL.md` + `skill/PATTERNS.md`), and the README describe one contract to four different readers. **No change ships with only some of them updated.** They are not documentation *about* the runtime — three of them are consumed by an agent or a machine, so a stale one does not read as out of date, it reads as authoritative and wrong.
+
+- **`bin/pusha.js` — `init`** writes files into a real theme. If the install shape changes (`snippets/pusha.liquid`, the asset name, what gets inserted into `layout/theme.liquid`, Path A vs Path B detection), `init` writes the old shape into someone's store.
+- **`bin/pusha.js` — `audit`** prints remediation inline, by design, so an agent can do the mechanical buckets without loading the skill. A bucket rule that still describes a removed config key or a superseded fix teaches the fix to every agent that runs it. Bucket J is the standing example: the Customer Events advice was *inverted*, and it sat in `BUCKET_RULES.J` telling agents to break working pixels.
+- **`skill/SKILL.md` + `skill/PATTERNS.md`** are the enrichment layer over the same rules. When a transform, a whitelist, or a bucket's decision tree moves, both files move with it — `PATTERNS.md` holds the per-family adapters, `SKILL.md` the procedure.
+- **`README.md`** is the contract of record for humans and the tie-breaker (above). If the other three changed and the README did not, the change is not finished.
+
+Checklist for any change to config keys, defaults, hook or event names and payloads, bucket rules or their remediation text, install layout, or the `--json` contract:
+
+1. Source (`src/`) — the behaviour.
+2. `bin/pusha.js` — `audit` rules and remediation, `init` writes.
+3. `skill/SKILL.md` and `skill/PATTERNS.md` — procedure and patterns.
+4. `README.md` — the documented contract.
+5. Tests, including the audit golden files.
+
+If one of the four genuinely does not apply, say so in the commit message. Silence reads as an oversight, because usually it is.
+
 ## What Pusha is
 
 Pusha is the PJAX framework product for Mimetic Themes — the runtime layer that powers PJAX-style navigation, the component registry, and page transitions in Shopify Online Store 2.0 themes. The goal is to extract the system that currently lives inside `src/lib/` of each consumer theme into a single versioned package so themes consume it instead of vendoring copies.
