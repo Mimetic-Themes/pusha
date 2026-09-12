@@ -520,14 +520,27 @@ Earlier text here described prefetch as an "opt-in plugin (Barba-style — core 
 small, prefetch is optional)"; that was intent, never implementation, and it is
 removed rather than restated so nobody designs against it.
 
-**This is a deliberate hold, not an oversight.** Measured 2026-09-11 on a clean
-build: 32.2 kB raw / **10.7 kB gzipped** for the UMD bundle — already under
-`@barba/core` alone (9.9 kB) before Barba adds the plugins needed to match, and
-that is with the analytics bridges, islands and the a11y handling included.
-Tree-shaking would save single-digit kB at best, Path A cannot benefit from it at
-all (one UMD file by construction), and moving optional subsystems behind dynamic
-imports would add a round-trip to the first navigation — the exact latency the
-product sells against.
+**This is a deliberate hold, not an oversight.** Measured 2026-09-12 on a clean
+build: 35.2 kB raw / **11.7 kB gzipped** for the UMD bundle, 27.1 kB / 8.1 kB for
+the ESM entry — with the analytics bridges, islands and the a11y handling
+included. Tree-shaking would save single-digit kB at best, Path A cannot benefit
+from it at all (one UMD file by construction), and moving optional subsystems
+behind dynamic imports would add a round-trip to the first navigation — the exact
+latency the product sells against.
+
+⚠ **This paragraph previously claimed 10.7 kB gzipped and "already under
+`@barba/core` alone (9.9 kB)".** Both were wrong, and the second inverted the
+argument: at 11.7 kB Pusha is *larger* than Barba's core, not smaller. The README
+had the honest framing on the same day — comparable feature set means
+`@barba/core` + `@barba/prefetch` + `@barba/css` + `@barba/router` at ~12.5 kB,
+and that is still without an analytics bridge or Section Rendering API
+revalidation. Keep the comparison feature-for-feature; the core-only number
+flatters us and does not survive a reader checking it.
+
+Bundle figures are measured, so they go stale on every merge. Re-measure with
+`npm run build` before quoting them, and keep this paragraph and the README's
+"Bundle sizes" table in step — they disagreed for a day while both claimed the
+same measurement date.
 
 **The trigger to revisit is a subsystem growing, not a size threshold.**
 `app-compat.ts` is ~0.3 kB gzipped today (measured by unwiring it and rebuilding).
