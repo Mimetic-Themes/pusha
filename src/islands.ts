@@ -70,25 +70,58 @@ export async function revalidateIslands(
     return;
   }
 
+  const applied = new Set<string>();
   Object.entries(json).forEach(([sectionId, html]) => {
     const selector = `#shopify-section-${CSS.escape(sectionId)}`;
-    document.querySelectorAll<HTMLElement>(selector).forEach((wrapper) => {
+    const wrappers = document.querySelectorAll<HTMLElement>(selector);
+    if (wrappers.length === 0) {
+      // The server rendered the section but there is no `#shopify-section-<id>`
+      // wrapper in this document to put it in. A theme block, a section the
+      // swap removed, or an id that never had a wrapper. Silence here is what
+      // made this look like a success.
+      dlog('islands', `NO TARGET for ${sectionId} — no #shopify-section-${sectionId} in the document`);
+      return;
+    }
+    wrappers.forEach((wrapper) => {
       hooks.onBeforeSwap?.(wrapper);
 
       const tmp = document.createElement('div');
       tmp.innerHTML = html.trim();
       const fresh = tmp.firstElementChild as HTMLElement | null;
-      if (!fresh) return;
+      if (!fresh) {
+        dlog('islands', `EMPTY response for ${sectionId} — keeping the current markup`);
+        return;
+      }
 
       wrapper.replaceWith(fresh);
+      applied.add(sectionId);
       hooks.onAfterSwap?.(fresh);
     });
   });
 
+  // Remove the class explicitly. It used to come off only because
+  // `wrapper.replaceWith()` destroyed the node carrying it, which meant every
+  // path that did NOT swap — no wrapper, empty response, an island marker that
+  // sits outside the wrapper being replaced — stranded `.is-revalidating` on a
+  // live element forever. A theme styling it as a dim or skeleton got a region
+  // that never came back. Removing from detached nodes too is harmless and
+  // keeps the rule one line instead of a liveness check.
+  islands.forEach(({ islandEl }) => islandEl.classList.remove('is-revalidating'));
+
   const elapsed = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - started);
-  dlog('islands', `swapped ${Object.keys(json).length} in ${elapsed}ms`);
+  const requested = Object.keys(json);
+  // Count what was APPLIED, not what came back. The old line reported the
+  // number of keys in the response, so "swapped 1" was printed whether or not a
+  // single node had been touched — the diagnostic that should have caught the
+  // stranded class instead certified the run as clean.
+  dlog('islands', `swapped ${applied.size}/${requested.length} in ${elapsed}ms`);
+  if (applied.size !== requested.length) {
+    dlog('islands', `NOT applied: ${requested.filter((id) => !applied.has(id)).join(', ')}`);
+  }
 
   document.dispatchEvent(
-    new CustomEvent('pjax:islands-revalidated', { detail: { sectionIds: Object.keys(json) } }),
+    new CustomEvent('pjax:islands-revalidated', {
+      detail: { sectionIds: Array.from(applied), requestedIds: requested },
+    }),
   );
 }

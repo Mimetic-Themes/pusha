@@ -288,7 +288,7 @@ The Shopify Section Rendering API lets you fetch any section's HTML in isolation
 - On navigations where prefetchConfig's `soft` TTL has elapsed but `hard` has not — page HTML is reused, islands fetched fresh
 - Never on uncached navigations — the page was just fetched, everything is current
 
-**Visual contract**: while an island is revalidating, it gets a `.is-revalidating` class that themes can style for a subtle dim/skeleton. The class is removed when the new HTML is in place.
+**Visual contract**: while an island is revalidating, it gets a `.is-revalidating` class that themes can style for a subtle dim/skeleton. The class is removed when the revalidation cycle ends — **on every path, including the ones that swap nothing**. It used to come off only because `wrapper.replaceWith()` destroyed the node carrying it, so an island whose `#shopify-section-<id>` wrapper was absent kept the class on a live element forever and a themed dim never lifted. Found in a browser, 2026-09-12; the diagnostic that should have caught it counted keys in the response rather than nodes replaced, so it printed `swapped 1` for a run that swapped nothing.
 
 **Exported as `@mimeticthemes/pusha/islands` subpath** for explicit imports. Auto-imported by main entry when prefetch is enabled.
 

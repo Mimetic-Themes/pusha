@@ -711,6 +711,91 @@ test('islands revalidate on a #hash URL', async () => {
   assert.equal(parsed.pathname, '/products/foo');
 });
 
+test('islands: .is-revalidating is cleared even when nothing was swapped', async () => {
+  // Found in a browser. The class used to come off only because
+  // `wrapper.replaceWith()` destroyed the node carrying it, so any path that
+  // did not swap left it on a live element forever — and a theme styling it as
+  // a dim or skeleton got a region that never came back.
+  //
+  // This fixture has the island marker but no `#shopify-section-price` wrapper
+  // to swap into, which is the exact shape the pre-existing hash test already
+  // had without anyone noticing.
+  const islandHtml = '<div data-island data-section-id="price">£20</div>';
+  (globalThis as Record<string, unknown>).fetch = async (input: string | URL) => {
+    const url = String(input);
+    if (url.includes('sections=')) {
+      return new Response(JSON.stringify({ price: islandHtml }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(
+      makePageHtml('product', '<div data-island data-section-id="price">£10</div>'),
+      { status: 200, headers: { 'Content-Type': 'text/html' } },
+    );
+  };
+
+  runtime.initRuntime({ prefetchConfig: { product: { soft: 1, hard: 60_000 } } });
+  const prefetch = await import('../src/prefetch.ts');
+  await prefetch.prefetchPage('/products/foo');
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 120));
+
+  assert.equal(
+    document.querySelectorAll('.is-revalidating').length,
+    0,
+    'no element is left dimmed after the cycle finishes',
+  );
+});
+
+test('islands: the event reports what was applied, not what was requested', async () => {
+  // The old diagnostic counted keys in the response, so "swapped 1" printed
+  // whether or not a node had been touched. Same for the event's sectionIds.
+  // A listener re-initialising the regions it names would have been re-running
+  // against markup that never changed.
+  const detail: Array<Record<string, unknown>> = [];
+  document.addEventListener('pjax:islands-revalidated', (e) => {
+    detail.push((e as CustomEvent).detail);
+  });
+
+  (globalThis as Record<string, unknown>).fetch = async (input: string | URL) => {
+    const url = String(input);
+    if (url.includes('sections=')) {
+      // Two sections come back; only `price` has somewhere to go.
+      return new Response(
+        JSON.stringify({
+          price: '<div id="shopify-section-price"><div data-island data-section-id="price">£20</div></div>',
+          ghost: '<div id="shopify-section-ghost">nowhere</div>',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return new Response(
+      makePageHtml(
+        'product',
+        '<div id="shopify-section-price"><div data-island data-section-id="price">£10</div></div>' +
+          '<div data-island data-section-id="ghost">no wrapper for me</div>',
+      ),
+      { status: 200, headers: { 'Content-Type': 'text/html' } },
+    );
+  };
+
+  runtime.initRuntime({ prefetchConfig: { product: { soft: 1, hard: 60_000 } } });
+  const prefetch = await import('../src/prefetch.ts');
+  await prefetch.prefetchPage('/products/foo');
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 120));
+
+  assert.equal(detail.length, 1, 'the event fires once');
+  assert.deepEqual(detail[0].sectionIds, ['price'], 'only the section that actually swapped');
+  assert.deepEqual(
+    (detail[0].requestedIds as string[]).sort(),
+    ['ghost', 'price'],
+    'what was asked for is still reported, separately',
+  );
+  assert.equal(document.querySelectorAll('.is-revalidating').length, 0, 'nothing left dimmed');
+});
+
 test('stylesheets in section bodies are synced, and only once', async () => {
   // Shopify's stylesheet_tag emits the link inside the section body, so a
   // head-only scan missed every section stylesheet and the first visit to each
