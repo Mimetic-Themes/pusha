@@ -118,7 +118,9 @@ This is the command that converts a curious reader into a user. It's also where 
 
 #### `npx @mimeticthemes/pusha audit`
 
-Runs the audit against the current directory (or path argument). Buckets A–H (per-script) plus the surface buckets: J (analytics), K (portal-to-body custom elements), L (per-request Liquid in the shell), M (persistent-shell stateful UI), P (partials). `--json` emits structured output for tools/agents. The CLI is the canonical audit implementation — there is no longer a parallel bash script.
+Runs the audit against the current directory (or path argument). Buckets A–H and K (per-script) plus the surface buckets: J (analytics), L (per-request Liquid in the shell), M (persistent-shell stateful UI), P (partials), X (theme app extensions). `--json` emits structured output for tools/agents. The CLI is the canonical audit implementation — there is no longer a parallel bash script.
+
+The authority on this list is `BUCKET_RULES` in `bin/pusha.js`; `skill/SKILL.md` restates it for the porting agent. All three drifted once already — X shipped in the CLI and the skill while this line still stopped at P.
 
 #### `npx @mimeticthemes/pusha init`
 

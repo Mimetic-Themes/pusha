@@ -157,7 +157,7 @@ npx github:mimetic-themes/pusha init
 
 This copies `pusha.min.js` into `assets/`, `pusha.liquid` into `snippets/`, and (with confirmation) inserts `{% render 'pusha' %}` into `layout/theme.liquid` before `</head>`.
 
-Flags: `--dry-run`, `--force`, `--yes` / `-y`.
+Flags: `--dry-run`, `--force`, `--yes` / `-y`, `--skip-detect`.
 
 ### Path B — bundler
 
@@ -968,18 +968,22 @@ Until Pusha is published, run the CLI straight from this repository with
 `npx github:mimetic-themes/pusha <command>`. After a Path B install it is on
 your project's `$PATH` as `pusha`.
 
-`init` flags: `--dry-run`, `--force`, `--yes` / `-y`.
+`init` flags: `--dry-run`, `--force`, `--yes` / `-y`, `--skip-detect` (install
+even when the directory does not look like a theme).
 
 `audit` flags: `--json` for structured output, `--full` to append the whole of
 `PATTERNS.md` to the report (one self-contained doc an agent can read in a
 single pass), `--no-whitelist` to disable the false-positive filters and see
-every raw finding. Pass a path to audit a different directory.
+every raw finding, `--ignore-manifest` to ignore `.pusha/MANIFEST.md` and treat
+every finding as unsettled. With `--json`, narrow the report with `--bucket`,
+`--action` (`transform` | `decide` | `verify` | `none`) and `--file`. Pass a
+path to audit a different directory.
 
 `skill` flags: `--print` to dump `SKILL.md` + `PATTERNS.md` to stdout, or
 `--claude` / `--cursor` / `--aider` to install the skill for that agent. Add
 `--global` to install into `~/` instead of the project.
 
-The audit classifies every script in the theme by transformation difficulty (buckets A–H), plus the buckets that cover a whole surface rather than a single script: J (analytics — coverage, payload conformance, placement, and raw pixels that bypass Customer Events), K (portal-to-body custom elements needing `data-pusha-cleanup`), L (per-request Liquid frozen in the shell), M (persistent-shell stateful UI), P (`{% partial %}` regions), and X (theme app extensions — which installed app blocks and embeds sit inside the swap container, and which survive it). The `pusha` skill consumes this output to apply the wrappers; agents without the skill can act on the audit's prescriptive "Next steps" block directly.
+The audit classifies every script in the theme by transformation difficulty (buckets A–H, plus K for portal-to-body custom elements needing `data-pusha-cleanup`), and then the buckets that cover a whole surface rather than a single script: J (analytics — coverage, payload conformance, placement, and raw pixels that bypass Customer Events), L (per-request Liquid frozen in the shell), M (persistent-shell stateful UI), P (`{% partial %}` regions), and X (theme app extensions — which installed app blocks and embeds sit inside the swap container, and which survive it). The `pusha` skill consumes this output to apply the wrappers; agents without the skill can act on the audit's prescriptive "Next steps" block directly.
 
 A `create-pusha` scaffolder for new themes is on the roadmap, once Pusha is
 published.
