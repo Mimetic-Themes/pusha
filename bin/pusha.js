@@ -1354,6 +1354,13 @@ function sectionIdResolvable(text, loc) {
 // render tag does not hand it `section`, and flagging every such snippet on
 // shape alone reports a working island as broken. Returns the offending sites,
 // so an empty array means every caller is correct.
+// One static pattern for every render tag, comparing the captured name rather
+// than building a regex per snippet. Two reasons: a snippet name goes straight
+// into the pattern otherwise, which is both an injection shape and simply wrong
+// for any name carrying a regex metacharacter; and the per-snippet version
+// re-walked the whole theme once per marker.
+const RENDER_TAG_WITH_ARGS = /\{%-?\s*(?:render|include)\s+['"]([\w.-]+)['"]([^%]*)-?%\}/g;
+
 function renderSitesMissingSection(themePath, snippetName) {
   const missing = [];
   for (const dir of ['sections', 'blocks', 'snippets', 'layout', 'templates']) {
@@ -1361,15 +1368,11 @@ function renderSitesMissingSection(themePath, snippetName) {
     if (!existsSync(abs)) continue;
     for (const file of walkFiles(abs, ['.liquid'])) {
       const text = stripLiquidComments(readFileText(file));
-      // The whole tag, which may wrap across lines when it carries arguments.
-      const re = new RegExp(
-        `\\{%-?\\s*(?:render|include)\\s+['"]${snippetName}['"]([\\s\\S]*?)-?%\\}`,
-        'g',
-      );
+      RENDER_TAG_WITH_ARGS.lastIndex = 0;
       let m;
-      while ((m = re.exec(text)) !== null) {
-        const args = m[1] ?? '';
-        if (/\bsection\s*:/.test(args)) continue;
+      while ((m = RENDER_TAG_WITH_ARGS.exec(text)) !== null) {
+        if (m[1] !== snippetName) continue;
+        if (/\bsection\s*:/.test(m[2] ?? '')) continue;
         const line = text.slice(0, m.index).split('\n').length;
         missing.push(`${relative(themePath, file)}:${line}`);
       }
