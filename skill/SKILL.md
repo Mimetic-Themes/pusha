@@ -13,7 +13,7 @@ For a typical Online Store 2.0 theme (Dawn-derived, no build pipeline):
 
 1. **`pusha init`** — installs the Path A runtime (`assets/pusha.min.js` + `snippets/pusha.liquid`) and patches `layout/theme.liquid`.
 2. **`pusha skill --claude`** (or `--cursor` / `--aider`) — installs this file and `PATTERNS.md` where the agent will find them.
-3. **`pusha audit --json --action transform`** — the mechanical work queue. The full report classifies every script into buckets A–H and K, plus the surface buckets J (analytics), L (Liquid shell state), M (shell UI), P (partials) and X (theme app extensions).
+3. **`pusha audit --json --action transform`** — the mechanical work queue. The full report classifies every script into buckets A–H and K, plus the surface buckets J (analytics), L (Liquid shell state), M (shell UI), P (partials), R (island candidates) and X (theme app extensions).
 4. **Work the queue**, one commit per file, on a branch. Apply `PATTERNS.md` routed by each finding's `location`. Anything not `action: transform` goes to the human, not into a guess.
 5. **`shopify theme check`**, then re-run `pusha audit` and compare against the previous run.
 
@@ -236,6 +236,14 @@ For each, give: the finding `id`, the file and line, the audit's own line quoted
 the surrounding code, and the options with a recommendation. Then stop and wait.
 Never pick a `decide` on the agent's own authority — that is the difference
 between the human steering the port and merely watching it happen.
+
+Bucket R is mostly `decide` by design. A broken island marker is mechanical and
+comes through as `transform`, but whether a region is stale-prone **enough to
+spend a request on** is a question about the store, not the code: a price that
+never moves is not stale, and revalidating it taxes every cached navigation.
+Present the candidates grouped by section with the sub-letter (A price, B
+availability, C variant state, E render-time) and let the human pick. Do not
+mark every candidate because the audit listed it.
 
 Typical members of this batch: bucket L `ask` findings (does this shell value
 need to be live?), bucket M custom modals (does it already own its close

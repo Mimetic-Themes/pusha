@@ -118,7 +118,7 @@ This is the command that converts a curious reader into a user. It's also where 
 
 #### `npx @mimeticthemes/pusha audit`
 
-Runs the audit against the current directory (or path argument). Buckets A–H and K (per-script) plus the surface buckets: J (analytics), L (per-request Liquid in the shell), M (persistent-shell stateful UI), P (partials), X (theme app extensions). `--json` emits structured output for tools/agents. The CLI is the canonical audit implementation — there is no longer a parallel bash script.
+Runs the audit against the current directory (or path argument). Buckets A–H and K (per-script) plus the surface buckets: J (analytics), L (per-request Liquid in the shell), M (persistent-shell stateful UI), P (partials), R (island candidates), X (theme app extensions). `--json` emits structured output for tools/agents. The CLI is the canonical audit implementation — there is no longer a parallel bash script.
 
 The authority on this list is `BUCKET_RULES` in `bin/pusha.js`; `skill/SKILL.md` restates it for the porting agent. All three drifted once already — X shipped in the CLI and the skill while this line still stopped at P.
 
@@ -301,6 +301,15 @@ answer whatever the stub is told to answer. Measured with curl on the same URL:
 with the header, the product object; without it, the section HTML keyed by the
 requested id. The Section Rendering API keys off `?sections=` and needs no
 Accept header.
+
+**The audit proposes islands; it never marks them.** Bucket R lists stale-prone
+regions inside the container (price, availability, inventory, selected variant,
+render-time values) and checks conformance of any `data-island` already present.
+Candidates are `decide`, never `transform`: revalidating costs a request and
+re-runs the section's JS, so whether a region is stale-prone enough to spend
+that on is a question about the store. Broken markers — no `data-section-id`, a
+marker in the shell, a snippet whose render sites pass no `section:` — are
+`transform`, because those are mechanical and each one fails silently.
 
 **Exported as `@mimeticthemes/pusha/islands` subpath** for explicit imports. Auto-imported by main entry when prefetch is enabled.
 

@@ -40,8 +40,8 @@ whitelists: on (default — pass --no-whitelist to disable)
 
 ## L. Liquid persistent state — request-scoped Liquid in the layout shell
   Per-request Liquid in the layout shell (layout/theme.liquid, section groups, transitively-rendered snippets) freezes on first load. Sub-letters mirror the request-scoped taxonomy: A=URL/template, B=customer, C=cart, D=locale, E=per-page object, F=personalization, G=time, H=app-injected. Rank: auto=URL-derivable in JS, ask=user decides (full-reload boundary or section refetch), ok=already handled by Pusha or theme convention.
-  layout/theme.liquid:2: [L-A auto] request.*
-      <html lang="{{ request.locale.iso_code }}">
+  snippets/site-footer.liquid:2: [L-G ok] 'now'/'today' | date
+      &copy; {{ 'now' | date: '%Y' }}
 
 ## M. Persistent-shell stateful UI — close-on-nav opt-in
   Persistent-shell stateful UI — modals/drawers/overlays that lived outside #MainContent and were authored assuming a full reload would dismiss them. Three remediation options: (1) add `data-pusha-close-on-nav` to the root (Pusha strips `[open]` / sets `aria-expanded="false"` / removes body classes listed in `data-pusha-body-class-on-open`); (2) implement a `closeOnNav()` method on the custom element; (3) call `Pusha.onBeforeLeave(() => this.close())` manually. Cart drawers and persistent widgets simply omit the marker — opt-in is the safe default.
@@ -49,11 +49,30 @@ whitelists: on (default — pass --no-whitelist to disable)
 
 ## J. Analytics surface
   Analytics surface. NOTE: Pusha reaches the pixel sandbox only through PREFIXED CUSTOM events — the customEvents bridge publishes pusha:page_viewed plus prefixed copies of the page-type payloads, and those are delivered to custom pixels and app pixels. What is fenced is publishing under STANDARD names, which the storefront API rejects, so a standard page_viewed never arrives on a swap. Delivery is not consumption: a third-party app pixel subscribed to the standard vocabulary has no mapping for a prefixed name, so reviving it still needs a companion custom pixel that forwards the event (docs/analytics-companion-pixel.md, README "Analytics & tracking"). This bucket checks the theme-serialized <script type="application/json" data-pusha-analytics-event> blocks anyway, because they are hand-written Liquid that nothing validates at runtime and keeping their shape right is what makes a supported publish path cheap to adopt later. Four kinds: coverage (a product/collection/search/cart page with no marker), conformance (unparseable JSON, a missing type attribute the browser then executes as JS, or a payload missing its required data key), placement (a marker in the persistent shell is re-read on every nav and would republish one page's payload forever), and raw-pixel (gtag/fbq/dataLayer calls installed directly in the theme — refire them manually from onAfterInit; do NOT migrate them into Customer Events, which would move a working pixel onto the unreachable channel).
-  (none)
+  Gaps — silent data loss or corruption:
+    (theme): [J-coverage] no product_viewed marker — the page exists but nothing re-publishes the event on a swap
+  A missing or malformed marker never throws — the event simply stops reaching Meta/GA4/TikTok/Klaviyo.
+  Validate on a published theme with live pixels; a preview environment won't show the loss.
 
 ## R. Island candidates — stale-prone regions in the container
   Island candidates — stale-prone regions INSIDE the swap container. Bucket L asks the same question about the persistent shell; R is the in-container answer, and they do not overlap (L freezes because the shell is never swapped, R goes stale because the page HTML came from the prefetch cache). Remedy is opt-in markup on the region root: `data-island data-section-id="{{ section.id }}"`. Pusha never infers islands — revalidating costs a request and re-runs the section JS, so a wrong guess taxes every cached navigation; these are CANDIDATES to accept or decline. Ranks: mark=clear candidate (price, availability, inventory, selected variant, render-time values), ask=depends on the store, ok=already marked, gap=a marker that cannot work. Sub-letters: A=price, B=availability/inventory, C=variant state, D=cart-derived (already covered by cart:mutated invalidation — verify the theme dispatches it), E=render-time values, marker=conformance of an existing data-island. THE ID MUST NAME A `#shopify-section-<id>` WRAPPER THAT EXISTS IN THE SAME DOCUMENT: Shopify keys the Section Rendering API response by section id and Pusha replaces that wrapper, so an id with no wrapper is fetched and then has nowhere to go. Sections and theme blocks get `section` from the renderer; snippets do not, so a snippet writing {{ section.id }} needs `section: section` passed at the render site or the attribute renders empty and fails the selector silently. Run the ported theme with `debug: true` — the runtime prints `swapped <applied>/<requested>`, `NO TARGET` for an id with no wrapper, and `RESPONSE MISMATCH` when the server did not key the response by what was asked for.
-  (none)
+  Markers that cannot work — these render fine and silently never revalidate:
+    snippets/no-id.liquid:1: [R-marker] data-island with no data-section-id — findIslands matches [data-island][data-section-id], so this is inert
+        <div data-island>{{ product.compare_at_price | money }}</div>
+    snippets/site-footer.liquid:1: [R-marker] data-island in the persistent shell — islands are collected from the swapped container only, so this never revalidates
+        <footer data-island data-section-id="footer">
+    snippets/stock-note.liquid:1: [R-marker] snippet writes {{ section.id }} and {% render %} does not inherit scope — these render sites pass no `section:`, so the id renders empty there: sections/main-product.liquid:6
+        <div data-island data-section-id="{{ section.id }}">
+  Already marked:
+    snippets/price-badge.liquid:1: [R-marker ok] include
+  Candidates — add data-island + data-section-id to the region root:
+    sections/main-product.liquid:2: [R-C section] selected_or_first_available_variant
+    sections/main-product.liquid:3: [R-A section] money filter
+    sections/main-product.liquid:4: [R-B section] availability
+    blocks/inventory.liquid:2: [R-B block] inventory.*
+    blocks/inventory.liquid:2: [R-C block] selected_or_first_available_variant
+  Islands only revalidate on a CACHED navigation — an uncached one was just fetched, so nothing fires.
+  Verify in a browser with debug: true, not in jsdom: a stubbed fetch answers whatever it is told to.
 
 ## P. Partials — server-rendered refresh regions (informational)
   Informational — {% partial %} + @shopify/partial-rendering regions (new-Liquid's islands substrate). The inventory maps each partial to its consumers. The partial name is a load-bearing string contract (renaming a declaration breaks every consumer), and Pusha must coordinate its container swap with the theme's partials.apply() so a nav mid-refresh has defined ordering.
@@ -63,14 +82,9 @@ whitelists: on (default — pass --no-whitelist to disable)
   Theme app extensions. Informational + advisory — an app's code cannot be mechanically transformed, so X inventories app surfaces and assigns each a swap-safety verdict routed by location. Two reports: X-surface lists every { "type": "@app" } declaration in a {% schema %}, split by container membership — a risk map that stays valid when the merchant installs something tomorrow, and it works with zero apps installed. X-placed recursively walks the blocks tree of every templates/*.json and sections/*.json plus config/settings_data.json -> current.blocks, and reports what is actually installed. Detection parses JSON and reads `type`: a text match misses the escaped `shopify:\/\/apps\/` encoding Shopify writes into some template files, and would report the flagship product template as app-free. Verdicts: at-risk (app block inside the swap container), survives (app block in a section group), survives-verify (app embed — outside the container, but references into the swapped region go stale with no repair signal), opaque (Script Tag API — invisible statically). App embeds with disabled: true are ignored.
   App wrapper: platform-generated fallback (no sections/apps.liquid or sections/_blocks.liquid)
   X-surface — where app blocks can land (@app schema declarations; valid with zero apps installed):
-    sections/only-templates-key.liquid  [section]    at-risk if used — renders inside the swap container
+    (none)
   X-placed — apps actually installed:
-    AT-RISK (1 app block) — inside the swap container; init JS ran on the old document and does not re-run:
-      widgetco · promo  [section]
-        sections/shell-group.json → section shell_sec (type: shell-section) → block widgetco_promo_shellkey  [shell — this placement survives]
-        templates/index.json → section apps_array_sec (type: apps) → block 0
-  Verdict → posture:
-    · section     → App block inside the swap container — its init JS ran on the old document and does not re-run. MEASURED 2026-09-11 against a purpose-built extension across 4 soft navigations (pusha-probe, run 0): exactly two shapes recover, and both do it with NO configuration and NO double-init. (1) An app block authored as a CUSTOM ELEMENT re-mounts for free via connectedCallback. (2) An app block that LISTENS FOR shopify:page:view — the Standard Storefront Events vocabulary at api/storefront-events-and-actions, which Pusha re-dispatches on every swap — rebinds the fresh node every time. Everything else went inert, and the loading shape made no difference: schema-attribute JS in <head>, an inline <script> in block markup, an in-markup <script src>, and a type=module script all failed identically. So re-executing the scripts in the swapped markup is NOT a general remedy — for the canonical case the JS is not in the markup at all, it is a <script async> the platform injects into <head>. If you own the app, the fix is to listen for shopify:page:view or author the block as a custom element; both are documented and supported. If you do NOT own the app, you cannot wrap code you did not write: opt the surrounding nav out with data-no-transition, or treat the page as ineligible for instant navigation. Two experimental theme-side fallbacks exist for non-cooperating apps and both ship OFF — window.theme.config.appCompat.sectionEvents dispatches shopify:section:un/load (an undocumented use of theme-editor events), and appCompat.reexecuteExtensionScripts re-runs cdn.shopify.com/extensions/ bundles at the risk of double-binding. Measure before enabling either. NOTE: the theme editor cannot answer any of this — it performs a full page reload on every theme app extension change, so every app reads as recoverable there. Verify on the storefront across a real swap. What is NOT yet measured is how many installed third-party apps have adopted shopify:page:view; the mechanism is proven, the adoption rate is not.
+    (none)
   Blind spot — Script Tag API: apps can inject <script> at runtime. Those tags are not in any theme file,
   so this audit cannot see them and their absence above is not evidence of absence. They initialize once
   and go silent after page one. Verify in a live session.
@@ -84,12 +98,12 @@ whitelists: on (default — pass --no-whitelist to disable)
   G DOMContentLoaded handlers:   0
   H module-level state:          0
   K portal-to-body classes:      0  (0 render site(s) need data-pusha-cleanup)
-  L Liquid persistent state:     1  (auto: 1, ask: 0, ok: 0)
+  L Liquid persistent state:     1  (auto: 0, ask: 0, ok: 1)
   M persistent-shell stateful UI: 0  (modals: 0, body-class lockouts: 0)
-  J analytics surface:           0  (gaps: 0, advisory: 0)
+  J analytics surface:           1  (gaps: 1, advisory: 0)
   P partials:                    0
-  R island candidates:           0  (mark: 0, ask: 0, already marked: 0, broken markers: 0)
-  X theme app extensions:        1  (at-risk: 1, survives: 0, embeds survives-verify: 0; @app sites: 1)
+  R island candidates:           9  (mark: 5, ask: 0, already marked: 1, broken markers: 3)
+  X theme app extensions:        0  (at-risk: 0, survives: 0, embeds survives-verify: 0; @app sites: 0)
 
 ## Suppressed by whitelists
   (none — no findings matched a whitelist in this run)
@@ -120,9 +134,9 @@ whitelists: on (default — pass --no-whitelist to disable)
   carries a stable `id` and an `action`, and `queue` lists the work in order.
   Install the rules it applies with: pusha skill --claude
 
-    transform    1   Lx1
+    transform    3   Rx3
                      Apply the documented fix. Mechanical — the rule is in remediationByLocation or bucketRules.
-    decide       1   Xx1
+    decide       6   Rx5  Jx1
                      Do not guess. Surface to the supervising human with the surrounding code and the options.
 
     pusha audit --json --action transform   # the mechanical queue, in order

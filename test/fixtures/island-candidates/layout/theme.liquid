@@ -1,0 +1,11 @@
+<!doctype html>
+<html>
+<head>{% render 'pusha' %}</head>
+<body data-template="{{ template }}">
+  {% sections 'header-group' %}
+  <main id="MainContent" data-page-container data-page-type="{{ template }}">
+    {{ content_for_layout }}
+  </main>
+  {% render 'site-footer' %}
+</body>
+</html>
