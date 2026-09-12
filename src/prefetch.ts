@@ -405,12 +405,30 @@ export function _resetPrefetchForTests(): void {
   warmedFrom.clear();
   activePrefetches = 0;
   prefetchQueue.length = 0;
+  cancelPendingWarmups();
 }
 
 // Eager nav-link warmup. Runs at requestIdleCallback time on initial load
 // and after PJAX swaps onto index/page templates. Same-page links and
 // /cart, /account, /checkout are skipped.
 const warmedFrom = new Set<string>();
+
+// A scheduled warmup outlives the call that scheduled it, and nothing held a
+// handle to cancel it. Harmless in a browser — the callback runs against the
+// same document, and `warmedFrom` stops it repeating. Not harmless in the
+// suite: each test tears its document down and builds a fresh one, so a warmup
+// scheduled by an earlier test fired inside a later one and warmed the new
+// document's nav links. That is what made `prefetch never runs more than two
+// requests at once` fail on node 22 and pass on 24 — a seventh fetch, arriving
+// against a stub that had accounted for six, leaving one in flight at assert
+// time. The bug was never in the limiter; the timing just decided which test
+// caught the stray.
+const pendingWarmups = new Set<() => void>();
+
+function cancelPendingWarmups(): void {
+  for (const cancel of pendingWarmups) cancel();
+  pendingWarmups.clear();
+}
 
 export interface NavWarmupOptions {
   /** Selector for the nav container. Defaults to '#header-group, header'. */
@@ -426,8 +444,8 @@ export function warmupNavLinks(options: NavWarmupOptions = {}): void {
   if (warmedFrom.has(window.location.pathname)) return;
   warmedFrom.add(window.location.pathname);
 
-  const idle = window.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 200));
-  idle(() => {
+  const run = () => {
+    pendingWarmups.delete(cancel);
     const sel = options.selector ?? '#header-group, header';
     const header = document.querySelector(sel);
     if (!header) {
@@ -449,5 +467,17 @@ export function warmupNavLinks(options: NavWarmupOptions = {}): void {
       warmed++;
     });
     if (warmed) dlog('prefetch', `nav-link warmup: ${warmed} links`);
-  });
+  };
+
+  // jsdom ships no requestIdleCallback, so the timeout path is the one the
+  // suite exercises — and the one that needed a handle.
+  let cancel: () => void;
+  if (typeof window.requestIdleCallback === 'function') {
+    const handle = window.requestIdleCallback(run);
+    cancel = () => window.cancelIdleCallback?.(handle);
+  } else {
+    const handle = setTimeout(run, 200);
+    cancel = () => clearTimeout(handle);
+  }
+  pendingWarmups.add(cancel);
 }
