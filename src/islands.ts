@@ -70,6 +70,23 @@ export async function revalidateIslands(
     return;
   }
 
+  // The response is supposed to be keyed by the ids we asked for. When it is
+  // not, every downstream symptom is confusing — the swap loop iterates keys
+  // that name no wrapper and reports "no target", which reads like a theme
+  // markup problem rather than a response that did not answer the question.
+  // Measured on `shopify theme dev`: asked for `template--<id>__main`, got back
+  // a key of `product`.
+  const askedFor = islands.map((i) => i.sectionId);
+  const cameBack = Object.keys(json);
+  const missing = askedFor.filter((id) => !cameBack.includes(id));
+  if (missing.length) {
+    dlog(
+      'islands',
+      `RESPONSE MISMATCH — asked for [${askedFor.join(', ')}], got [${cameBack.join(', ')}]. ` +
+        `Missing: ${missing.join(', ')}. The server did not key the response by the requested section ids.`,
+    );
+  }
+
   const applied = new Set<string>();
   Object.entries(json).forEach(([sectionId, html]) => {
     const selector = `#shopify-section-${CSS.escape(sectionId)}`;
