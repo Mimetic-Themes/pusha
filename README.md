@@ -915,12 +915,12 @@ Built in, not configurable:
 
 ## Bundle sizes
 
-Measured from a clean `npm run build` on 2026-09-11:
+Measured from a clean `npm run build` on 2026-09-12:
 
 | File | Raw | Gzipped |
 |---|---|---|
-| `dist/pusha.min.js` (UMD, prod) | 34.7 kB | **11.5 kB** |
-| `dist/pusha.esm.js` (ESM, main entry) | 26.9 kB | 8.1 kB |
+| `dist/pusha.min.js` (UMD, prod) | 35.3 kB | **11.7 kB** |
+| `dist/pusha.esm.js` (ESM, main entry) | 27.2 kB | 8.2 kB |
 
 Grown from 9.1 kB gzipped in the first build — the analytics bridges, the standard
 cart event bridge, and the app-compatibility flags landed since. The UMD bundle is everything — navigation, prefetch cache,
