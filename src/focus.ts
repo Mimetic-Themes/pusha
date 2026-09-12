@@ -40,6 +40,27 @@ export function focusContainer(container: HTMLElement, hash: string): void {
       return;
     }
   }
+
+  // An `[autofocus]` in the incoming content is the page author naming where
+  // focus belongs, which is more specific than this module's default — a search
+  // page wants the query field, not the container. The browser will not do it
+  // for us: swapped-in content arrives while the document already has a focused
+  // element, so autofocus processing is declined ("Autofocus processing was
+  // blocked because a document already has a focused element" — observed on a
+  // collection page). Honouring it here is the difference between the attribute
+  // working on a soft navigation and being silently dead.
+  //
+  // The hash still wins: the buyer clicked a link to a specific anchor, which
+  // is intent expressed later than the markup was written.
+  const autofocus = container.querySelector<HTMLElement>('[autofocus]');
+  if (autofocus) {
+    autofocus.focus({ preventScroll: true });
+    // Verified rather than assumed: [autofocus] on a disabled input, a hidden
+    // element, or a plain <div> is a no-op, and leaving focus on the outgoing
+    // page's link is worse than the default.
+    if (document.activeElement === autofocus) return;
+  }
+
   makeFocusable(container);
   container.focus({ preventScroll: true });
 }
