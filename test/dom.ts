@@ -99,6 +99,12 @@ export function setupDom(initialTemplate = 'index', initialBody = '<h1>Home</h1>
   // jsdom doesn't implement scrollTo; stub to avoid Not implemented warnings.
   w.scrollTo = (() => {}) as typeof w.scrollTo;
 
+  // jsdom leaves Element.scrollIntoView undefined — not "not implemented", but
+  // absent, so calling it is a TypeError rather than a warning. focus.ts calls
+  // it on the hash target, which is why nothing in the suite could reach the
+  // hash branch of focusContainer until this stub existed.
+  w.Element.prototype.scrollIntoView = function scrollIntoView() {};
+
   // Reset history.scrollRestoration setter — jsdom allows it.
   (w.history as unknown as { scrollRestoration: ScrollRestoration }).scrollRestoration = 'auto';
 

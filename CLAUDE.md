@@ -410,7 +410,7 @@ Themes that want fine-grained control populate `cartStatefulRoutes` with the rou
 
 PJAX nav has real a11y implications. The runtime handles:
 
-- **Focus restoration**: after DOM swap, focus is moved to either the URL hash target (if any) or to `#MainContent` (or whatever element matches `[data-page-container]`). Without this, keyboard users get lost after every nav.
+- **Focus restoration**: after DOM swap, focus is moved to the first of these that exists — the URL hash target, an `[autofocus]` element inside the incoming content, `#MainContent` (or whatever matches `[data-page-container]`). Without this, keyboard users get lost after every nav. The `[autofocus]` step exists because the browser will not run its own autofocus processing on swapped-in content (the document already has a focused element, so it declines and logs a warning), which would otherwise make the attribute silently dead on every soft navigation. The hash wins over `[autofocus]`: it is intent expressed later than the markup.
 - **Screen reader announcement**: an offscreen `aria-live="polite"` region is updated with the new page title after PJAX swap, so screen readers announce the navigation. Without this, the URL silently changes and assistive tech doesn't know.
 - **Reduced motion**: when `prefers-reduced-motion: reduce` matches, transitions are skipped (instant swap, no `is-transitioning-*` classes). Themes can override per-transition.
 

@@ -906,7 +906,8 @@ Sections written to be re-init-safe under page swaps work for the theme editor a
 
 Built in, not configurable:
 
-- **Focus restoration** — focus moves to the URL hash target (if any) or to the swap container after every nav. Without this, keyboard users get stuck on the now-removed link.
+- **Focus restoration** — after every nav focus moves to the first of these that exists: the URL hash target, an `[autofocus]` element in the incoming content, the swap container. Without this, keyboard users get stuck on the now-removed link.
+- **`[autofocus]` keeps working on a soft navigation** — the browser declines to process it, because swapped-in content arrives while the document already has a focused element. Pusha applies it instead. Put `autofocus` on the search field of a search template and it behaves the same whether the page was loaded or navigated to. An `[autofocus]` that cannot take focus (disabled, hidden, not focusable) falls through to the container.
 - **Screen-reader announcement** — an offscreen `aria-live="polite"` region is updated with the new page title.
 - **Reduced motion** — when `prefers-reduced-motion: reduce` matches, transitions are skipped (instant swap, no `is-transitioning-*` classes).
 

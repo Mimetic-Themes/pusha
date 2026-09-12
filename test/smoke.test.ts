@@ -424,6 +424,53 @@ test('customEvents off leaves publish() untouched — Pusha makes no rejected ca
   );
 });
 
+test('[autofocus] in the incoming content takes focus instead of the container', async () => {
+  // The browser will not do this for us: swapped-in content arrives while the
+  // document already has a focused element, so autofocus processing is
+  // declined. Without this, the attribute is silently dead on every soft
+  // navigation and a search template loads with focus on the container.
+  fetchResponder = () => ({
+    status: 200,
+    body: makePageHtml('search', '<h1>Search</h1><input id="q" autofocus>'),
+  });
+
+  runtime.initRuntime();
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 60));
+
+  assert.equal(document.activeElement?.id, 'q', 'the authored target has focus');
+});
+
+test('a hash target still outranks [autofocus] — the click is the later intent', async () => {
+  fetchResponder = () => ({
+    status: 200,
+    body: makePageHtml('search', '<input id="q" autofocus><div id="results">R</div>'),
+  });
+
+  document.body.innerHTML += '<a id="deep" href="/search#results">Results</a>';
+  runtime.initRuntime();
+  document.querySelector<HTMLAnchorElement>('#deep')!.click();
+  await new Promise((r) => setTimeout(r, 60));
+
+  assert.equal(document.activeElement?.id, 'results', 'hash wins over autofocus');
+});
+
+test('an [autofocus] that cannot take focus falls through to the container', async () => {
+  // autofocus on a disabled input, a hidden element or a plain <div> is a
+  // no-op. Trusting it without checking would leave focus on the outgoing
+  // page's link, which is worse than the default.
+  fetchResponder = () => ({
+    status: 200,
+    body: makePageHtml('search', '<input id="q" autofocus disabled><h1>Search</h1>'),
+  });
+
+  runtime.initRuntime();
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 60));
+
+  assert.equal(document.activeElement?.id, 'MainContent', 'container took focus');
+});
+
 test('data-no-transition on link skips PJAX', async () => {
   const link = document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!;
   link.setAttribute('data-no-transition', '');
