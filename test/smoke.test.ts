@@ -1108,6 +1108,29 @@ test('nav-link warmup excludes SHOPIFY_RESERVED routes (incl. /customer_authenti
   assert.ok(warmedUrls.some((u) => u.includes('/collections/all')), 'normal links still warmed');
 });
 
+test('a scheduled nav-link warmup does not survive a reset', async () => {
+  // The leak this pins: warmup schedules a callback 200ms out and nothing held
+  // the handle, so a warmup scheduled by one test fired inside a later one and
+  // spent a fetch on the fresh document's nav links. It surfaced as the
+  // concurrency test seeing a seventh request it had not accounted for —
+  // intermittently, and only on the node version whose timing lined the two up.
+  // Asserting on fetch traffic after a reset is the honest shape: the stray
+  // request is the damage, wherever it lands.
+  const prefetchModule = await import('../src/prefetch.ts');
+
+  prefetchModule.warmupNavLinks();
+  prefetchModule._resetPrefetchForTests();
+
+  const before = fetchCalls.length;
+  await new Promise((r) => setTimeout(r, 250));
+
+  assert.equal(
+    fetchCalls.length,
+    before,
+    'a warmup cancelled by reset must not reach the wire',
+  );
+});
+
 test('/cart IS intercepted (regular themed page)', async () => {
   document.body.innerHTML += `<a id="cart" href="/cart">Cart</a>`;
   runtime.initRuntime();
