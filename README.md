@@ -709,7 +709,7 @@ Dispatched on `document`:
 |---|---|---|
 | `pjax:before-nav` | `{ url, event }` | Cancelable. `preventDefault()` on the CustomEvent falls through to a full nav. |
 | `pjax:content-swap` | `{ url, template, cached }` | Fires after `onAfterInit`. |
-| `pjax:islands-revalidated` | `{ sectionIds }` | Fires after Section Rendering API revalidation. |
+| `pjax:islands-revalidated` | `{ sectionIds, requestedIds }` | Fires after Section Rendering API revalidation. `sectionIds` is what was actually swapped into the page; `requestedIds` is what was asked for. They differ when the server renders a section this document has no `#shopify-section-<id>` wrapper for. |
 | `cart:mutated` | `{ source, cart?, lastOperation? }` | **The theme dispatches this** after any cart change. Pusha listens and invalidates prefetch — and also dispatches it itself, with `source: 'shopify-standard-events'`, when a standard cart event settles. See [Cart](#cart). |
 
 ### Islands (Section Rendering API)
@@ -723,7 +723,9 @@ For inventory- and price-sensitive regions inside templates that use long prefet
 </div>
 ```
 
-After a cached navigation, Pusha fetches `?sections=section-id-1,section-id-2`, parses the JSON response, and hot-swaps the section markup. While revalidating, the island gets `.is-revalidating` for a subtle dim/skeleton.
+After a cached navigation, Pusha fetches `?sections=section-id-1,section-id-2`, parses the JSON response, and hot-swaps the section markup. While revalidating, the island gets `.is-revalidating` for a subtle dim/skeleton; it is removed when the cycle ends, whether or not anything was swapped.
+
+The island marker and the `#shopify-section-<id>` wrapper it names have to be in the same document. Shopify returns section HTML keyed by section id, and Pusha replaces `#shopify-section-<id>`, so an island whose `data-section-id` has no matching wrapper is fetched and then has nowhere to go. Run with `debug: true` and the log says `NO TARGET` for exactly that case.
 
 ### Cart
 

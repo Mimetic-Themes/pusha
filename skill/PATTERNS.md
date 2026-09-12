@@ -673,6 +673,15 @@ shell region with it does nothing at all, silently. Use option 1 (derive the
 value in JS on `onAfterSwap`) or option 3 (`data-no-transition` to force a full
 load at that boundary) instead.
 
+**If you do add `[data-island][data-section-id]` to a section inside the
+container, the id must name a `#shopify-section-<id>` wrapper that exists in the
+same document.** Shopify keys the Section Rendering API response by section id
+and Pusha replaces that wrapper, so an island naming an id with no wrapper —
+a theme block, or a section rendered without one — is fetched and then has
+nowhere to go. Run the port with `debug: true` and the log prints `NO TARGET`
+for exactly that, plus `swapped <applied>/<requested>` so a partial apply is
+visible.
+
 **3. Mark as reload boundary.**
 
 For L-B auth flows specifically: add the relevant route to `data-no-transition` (the skill's bucket H/K escape hatch) so the link forces a full nav, refreshing the persistent shell's `customer.*` state. Pusha already excludes these from interception — the authority is `SHOPIFY_RESERVED` in `src/routes.ts`, shared by link interception and prefetch so the two cannot disagree. It currently covers `/checkout(s)`, the `/account/*` auth routes, `/customer_authentication/*`, `/password`, `/localization`, `/gift_card(s)`, the app proxy `/a/*`, and the GET routes that mutate cart state (`/cart/add`, `/cart/change`, `/cart/update`, `/cart/clear`, cart permalinks) plus `/discount/*`. Read the regex rather than trusting this list.
