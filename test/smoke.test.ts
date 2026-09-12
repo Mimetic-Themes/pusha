@@ -711,6 +711,45 @@ test('islands revalidate on a #hash URL', async () => {
   assert.equal(parsed.pathname, '/products/foo');
 });
 
+test('islands: the sections request sends no Accept: application/json', async () => {
+  // Measured in a browser and then with curl. On a product URL that header
+  // triggers Shopify's product-JSON content negotiation, which beats the query
+  // string: `?sections=` is ignored and the body is `{"product": {...}}` with
+  // status 200 and content-type application/json. Every check downstream
+  // passed, the single key named no section, and nothing was ever swapped — so
+  // islands never worked on a product page, which is the case they exist for.
+  const headersSeen: Array<Record<string, string>> = [];
+  (globalThis as Record<string, unknown>).fetch = async (input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes('sections=')) {
+      headersSeen.push((init?.headers ?? {}) as Record<string, string>);
+      return new Response(JSON.stringify({ price: '<div id="shopify-section-price">£20</div>' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(
+      makePageHtml('product', '<div id="shopify-section-price"><div data-island data-section-id="price">£10</div></div>'),
+      { status: 200, headers: { 'Content-Type': 'text/html' } },
+    );
+  };
+
+  runtime.initRuntime({ prefetchConfig: { product: { soft: 1, hard: 60_000 } } });
+  const prefetch = await import('../src/prefetch.ts');
+  await prefetch.prefetchPage('/products/foo');
+  document.querySelector<HTMLAnchorElement>('a[href="/products/foo"]')!.click();
+  await new Promise((r) => setTimeout(r, 120));
+
+  assert.equal(headersSeen.length, 1, 'the sections request was made');
+  const keys = Object.keys(headersSeen[0]).map((k) => k.toLowerCase());
+  assert.ok(!keys.includes('accept'), `no Accept header — got ${JSON.stringify(headersSeen[0])}`);
+  assert.equal(
+    (headersSeen[0] as Record<string, string>)['X-Requested-With'],
+    'XMLHttpRequest',
+    'the request is still identifiable as a Pusha fetch',
+  );
+});
+
 test('islands: .is-revalidating is cleared even when nothing was swapped', async () => {
   // Found in a browser. The class used to come off only because
   // `wrapper.replaceWith()` destroyed the node carrying it, so any path that

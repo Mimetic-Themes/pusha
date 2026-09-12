@@ -290,6 +290,18 @@ The Shopify Section Rendering API lets you fetch any section's HTML in isolation
 
 **Visual contract**: while an island is revalidating, it gets a `.is-revalidating` class that themes can style for a subtle dim/skeleton. The class is removed when the revalidation cycle ends — **on every path, including the ones that swap nothing**. It used to come off only because `wrapper.replaceWith()` destroyed the node carrying it, so an island whose `#shopify-section-<id>` wrapper was absent kept the class on a live element forever and a themed dim never lifted. Found in a browser, 2026-09-12; the diagnostic that should have caught it counted keys in the response rather than nodes replaced, so it printed `swapped 1` for a run that swapped nothing.
 
+**Never send `Accept: application/json` on the sections request.** On a product
+URL that header triggers Shopify's product-JSON content negotiation, which beats
+the query string: `?sections=` is ignored and the response is `{"product": {…}}`
+at status 200 with content-type `application/json`. Every check downstream
+passes, the single key names no section, and nothing is swapped. Islands
+therefore never worked on a product page — the case they exist for — from the
+first release until 2026-09-12, and no test caught it because jsdom fixtures
+answer whatever the stub is told to answer. Measured with curl on the same URL:
+with the header, the product object; without it, the section HTML keyed by the
+requested id. The Section Rendering API keys off `?sections=` and needs no
+Accept header.
+
 **Exported as `@mimeticthemes/pusha/islands` subpath** for explicit imports. Auto-imported by main entry when prefetch is enabled.
 
 ### Theme editor integration

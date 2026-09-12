@@ -57,9 +57,20 @@ export async function revalidateIslands(
 
   let json: Record<string, string>;
   try {
+    // NO `Accept: application/json`. On a product URL that header triggers
+    // Shopify's product-JSON content negotiation, which wins over the query
+    // string: `?sections=` is ignored and the response is the PRODUCT object —
+    // `{"product": {...}}`, status 200, content-type application/json. Every
+    // downstream check passed and nothing was ever swapped, because the one key
+    // in the response named no section. Islands therefore never worked on a
+    // product page, on any theme, which is the case they exist for (price and
+    // availability). Measured with curl against the same URL, 2026-09-12:
+    // with the header, the product JSON; without it, the section HTML keyed by
+    // the requested id. The Section Rendering API keys off `?sections=` and
+    // needs no Accept header at all.
     const res = await fetch(url, {
       method: 'GET',
-      headers: { 'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json' },
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
       credentials: 'same-origin',
     });
     if (!res.ok) throw new Error(`sections=${res.status}`);
